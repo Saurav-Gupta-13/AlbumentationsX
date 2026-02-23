@@ -22,6 +22,8 @@ keypoints, volumes, and 3D masks, ensuring consistent transformation across
 different data modalities.
 """
 
+from __future__ import annotations
+
 from typing import Any, Literal
 
 import numpy as np
@@ -33,6 +35,7 @@ from albumentations.core.transforms_interface import (
 )
 from albumentations.core.type_definitions import (
     ALL_TARGETS,
+    D4_INVERSE,
     ImageType,
     VolumeType,
     d4_group_elements,
@@ -70,6 +73,9 @@ class VerticalFlip(DualTransform):
         - For multi-channel images (like RGB), each channel is flipped independently.
         - Bounding boxes are adjusted to match their new positions in the flipped image.
         - Keypoints are moved to their new positions in the flipped image.
+        - This transform is self-inverse: applying it twice returns the original image.
+          Call ``inverse()`` to get a new instance that undoes the flip (which is identical to
+          applying the flip again), useful for TTA pipelines.
 
     Mathematical Details:
         1. For an input image I of shape (H, W, C), the output O is:
@@ -96,6 +102,12 @@ class VerticalFlip(DualTransform):
          [[ 1  2  3]
           [ 4  5  6]]]
         # The original image is flipped vertically, with rows reversed
+
+        >>> # TTA: flip, run inference, unflip the predicted mask
+        >>> aug = A.VerticalFlip(p=1)
+        >>> aug_image = aug(image=image)["image"]
+        >>> pred_mask = np.zeros_like(image[..., :1])  # placeholder for model output
+        >>> restored_mask = aug.inverse()(image=pred_mask)["image"]
 
     """
 
@@ -142,6 +154,10 @@ class VerticalFlip(DualTransform):
             return masks3d
         return self.apply_to_volumes(masks3d, **params)
 
+    def inverse(self) -> VerticalFlip:
+        """Return a new VerticalFlip (vertical flip is self-inverse)."""
+        return VerticalFlip(p=1)
+
 
 class HorizontalFlip(DualTransform):
     """Flip the input horizontally around the y-axis.
@@ -158,6 +174,12 @@ class HorizontalFlip(DualTransform):
 
     Supported bboxes:
         hbb, obb
+
+    Note:
+        - This transform is self-inverse: applying it twice returns the original image.
+          Call ``inverse()`` to get a new instance that undoes the flip (identical to applying
+          the flip again), useful for TTA pipelines.
+
     Examples:
         >>> import numpy as np
         >>> import albumentations as A
@@ -182,6 +204,12 @@ class HorizontalFlip(DualTransform):
         >>> flipped_mask = transformed["mask"]    # Mask flipped horizontally
         >>> flipped_bboxes = transformed["bboxes"]  # BBox coordinates adjusted for horizontal flip
         >>> flipped_keypoints = transformed["keypoints"]  # Keypoint x-coordinates flipped
+
+        >>> # TTA: flip, run inference, unflip the predicted mask
+        >>> aug = A.HorizontalFlip(p=1)
+        >>> aug_image = aug(image=image)["image"]
+        >>> pred_mask = np.zeros_like(image[..., :1])  # placeholder for model output
+        >>> restored_mask = aug.inverse()(image=pred_mask)["image"]
 
     """
 
@@ -228,6 +256,10 @@ class HorizontalFlip(DualTransform):
             return masks3d
         return self.apply_to_volumes(masks3d, **params)
 
+    def inverse(self) -> HorizontalFlip:
+        """Return a new HorizontalFlip (horizontal flip is self-inverse)."""
+        return HorizontalFlip(p=1)
+
 
 class Transpose(DualTransform):
     """Transpose the input by swapping its rows and columns.
@@ -250,7 +282,9 @@ class Transpose(DualTransform):
     Note:
         - The dimensions of the output will be swapped compared to the input. For example,
           an input image of shape (100, 200, 3) will result in an output of shape (200, 100, 3).
-        - This transform is its own inverse. Applying it twice will return the original input.
+        - This transform is self-inverse: applying it twice returns the original image.
+          Call ``inverse()`` to get a new instance that undoes the transpose (identical to
+          applying it again), useful for TTA pipelines.
         - For multi-channel images (like RGB), the channels are preserved in their original order.
         - Bounding boxes will have their coordinates adjusted to match the new image dimensions.
         - Keypoints will have their x and y coordinates swapped.
@@ -279,6 +313,12 @@ class Transpose(DualTransform):
          [[ 4  5  6]
           [10 11 12]]]
         # The original 2x2x3 image is now 2x2x3, with rows and columns swapped
+
+        >>> # TTA: transpose, run inference, un-transpose the predicted mask
+        >>> aug = A.Transpose(p=1)
+        >>> aug_image = aug(image=image)["image"]
+        >>> pred_mask = np.zeros((aug_image.shape[0], aug_image.shape[1], 1), dtype=np.uint8)
+        >>> restored_mask = aug.inverse()(image=pred_mask)["image"]
 
     """
 
@@ -332,6 +372,10 @@ class Transpose(DualTransform):
             )
         return self.apply_to_volumes(masks3d, **params)
 
+    def inverse(self) -> Transpose:
+        """Return a new Transpose (transpose is self-inverse)."""
+        return Transpose(p=1)
+
 
 class D4(DualTransform):
     """Applies one of the eight possible D4 dihedral group transformations to a square-shaped input,
@@ -353,6 +397,7 @@ class D4(DualTransform):
 
     When `group_element` is specified, the transform is deterministic—useful for TTA (Test Time
     Augmentation) where you need to apply each of the 8 symmetries explicitly and invert predictions.
+    Call ``inverse()`` on a deterministic instance to get a new transform that undoes the operation.
 
     Args:
         p (float): Probability of applying the transform. Default: 1.0.
@@ -377,6 +422,7 @@ class D4(DualTransform):
         - When applied to bounding boxes or keypoints, their coordinates will be adjusted according
           to the selected transformation.
         - This transform preserves the aspect ratio and size of the input.
+        - ``inverse()`` requires ``group_element`` to be set explicitly; raises ``ValueError`` otherwise.
 
     Examples:
         >>> import numpy as np
@@ -389,12 +435,15 @@ class D4(DualTransform):
         >>> transformed_image = transformed['image']
         # The resulting image will be one of the 8 possible D4 transformations of the input
 
-        >>> # TTA: apply each D4 symmetry explicitly
+        >>> # TTA: apply each D4 symmetry, run inference, then undo the transform on the prediction
         >>> from albumentations.core.type_definitions import d4_group_elements
+        >>> predictions = []
         >>> for element in d4_group_elements:
-        ...     tta_transform = A.D4(p=1.0, group_element=element)
-        ...     augmented = tta_transform(image=image)
-        ...     # Run inference on augmented['image'], then invert prediction using element
+        ...     aug = A.D4(p=1.0, group_element=element)
+        ...     aug_image = aug(image=image)["image"]
+        ...     pred_mask = np.zeros((100, 100, 1), dtype=np.uint8)  # placeholder for model output
+        ...     restored = aug.inverse()(image=pred_mask)["image"]
+        ...     predictions.append(restored)
 
     """
 
@@ -530,6 +579,19 @@ class D4(DualTransform):
             "group_element": self.random_generator.choice(d4_group_elements),
         }
 
+    def inverse(self) -> D4:
+        """Return a new D4 configured with the inverse group element.
+
+        Raises:
+            ValueError: If ``group_element`` is ``None`` (random mode cannot be inverted).
+
+        """
+        if self.group_element is None:
+            raise ValueError(
+                "Cannot invert D4 with random group_element. Set group_element explicitly for TTA.",
+            )
+        return D4(p=1, group_element=D4_INVERSE[self.group_element])
+
 
 class SquareSymmetry(D4):
     """Applies one of the eight possible square symmetry transformations to a square-shaped input.
@@ -547,6 +609,7 @@ class SquareSymmetry(D4):
 
     When `group_element` is specified, the transform is deterministic—useful for TTA (Test Time
     Augmentation) where you need to apply each of the 8 symmetries explicitly and invert predictions.
+    Call ``inverse()`` on a deterministic instance to get a new transform that undoes the operation.
 
     Args:
         p (float): Probability of applying the transform. Default: 1.0.
@@ -571,6 +634,7 @@ class SquareSymmetry(D4):
         - When applied to bounding boxes or keypoints, their coordinates will be adjusted according
           to the selected transformation.
         - This transform preserves the aspect ratio and size of the input.
+        - ``inverse()`` requires ``group_element`` to be set explicitly; raises ``ValueError`` otherwise.
 
     Examples:
         >>> import numpy as np
@@ -583,10 +647,27 @@ class SquareSymmetry(D4):
         >>> transformed_image = transformed['image']
         # The resulting image will be one of the 8 possible square symmetry transformations of the input
 
-        >>> # TTA: apply each symmetry explicitly
+        >>> # TTA: apply each symmetry, run inference, then undo the transform on the prediction
         >>> from albumentations.core.type_definitions import d4_group_elements
+        >>> predictions = []
         >>> for element in d4_group_elements:
-        ...     tta_transform = A.SquareSymmetry(p=1.0, group_element=element)
-        ...     augmented = tta_transform(image=image)
+        ...     aug = A.SquareSymmetry(p=1.0, group_element=element)
+        ...     aug_image = aug(image=image)["image"]
+        ...     pred_mask = np.zeros((100, 100, 1), dtype=np.uint8)  # placeholder for model output
+        ...     restored = aug.inverse()(image=pred_mask)["image"]
+        ...     predictions.append(restored)
 
     """
+
+    def inverse(self) -> SquareSymmetry:
+        """Return a new SquareSymmetry configured with the inverse group element.
+
+        Raises:
+            ValueError: If ``group_element`` is ``None`` (random mode cannot be inverted).
+
+        """
+        if self.group_element is None:
+            raise ValueError(
+                "Cannot invert SquareSymmetry with random group_element. Set group_element explicitly for TTA.",
+            )
+        return SquareSymmetry(p=1, group_element=D4_INVERSE[self.group_element])

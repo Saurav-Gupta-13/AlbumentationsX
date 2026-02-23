@@ -5,6 +5,8 @@ Includes transforms for 90-degree rotations and arbitrary angle rotations with v
 border handling options.
 """
 
+from __future__ import annotations
+
 import math
 from typing import Any, Literal, cast
 
@@ -21,6 +23,7 @@ from albumentations.core.transforms_interface import (
 )
 from albumentations.core.type_definitions import (
     ALL_TARGETS,
+    C4_INVERSE,
     ImageType,
     VolumeType,
     c4_group_elements,
@@ -68,9 +71,13 @@ class RandomRotate90(DualTransform):
         - Properly represents the dihedral group D4 symmetries
         - Avoids potential correlation between separate rotation and flip augmentations
 
+        ``inverse()`` requires ``group_element`` to be set explicitly; raises ``ValueError`` otherwise.
+
     When `group_element` is specified, the transform is deterministic—useful for TTA (Test Time
     Augmentation) where you need to apply each of the 4 rotations (0°, 90°, 180°, 270°) explicitly
     and invert predictions. Uses the same naming as D4: C4 is the rotation subgroup of D4.
+    Call ``inverse()`` on a deterministic instance to get a new transform that undoes the rotation
+    (r90 ↔ r270, r180 ↔ r180, e ↔ e).
 
     Args:
         p (float): probability of applying the transform. Default: 1.0.
@@ -120,12 +127,15 @@ class RandomRotate90(DualTransform):
         >>> rotated_keypoints = transformed["keypoints"]
         >>> rotated_keypoint_labels = transformed["keypoint_labels"]
 
-        >>> # TTA: apply each of the 4 rotations explicitly (same pattern as D4)
+        >>> # TTA: apply each of the 4 rotations, run inference, then undo on the predicted mask
         >>> from albumentations.core.type_definitions import c4_group_elements
+        >>> predictions = []
         >>> for element in c4_group_elements:
-        ...     tta_transform = A.RandomRotate90(p=1.0, group_element=element)
-        ...     augmented = tta_transform(image=image)
-        ...     # Run inference on augmented['image'], then invert prediction using element
+        ...     aug = A.RandomRotate90(p=1.0, group_element=element)
+        ...     aug_image = aug(image=image)["image"]
+        ...     pred_mask = np.zeros((100, 100, 1), dtype=np.uint8)  # placeholder for model output
+        ...     restored = aug.inverse()(image=pred_mask)["image"]
+        ...     predictions.append(restored)
 
     """
 
@@ -203,6 +213,19 @@ class RandomRotate90(DualTransform):
         **params: Any,
     ) -> VolumeType:
         return self.apply_to_volumes(masks3d, group_element, **params)
+
+    def inverse(self) -> RandomRotate90:
+        """Return a new RandomRotate90 configured with the inverse group element.
+
+        Raises:
+            ValueError: If ``group_element`` is ``None`` (random mode cannot be inverted).
+
+        """
+        if self.group_element is None:
+            raise ValueError(
+                "Cannot invert RandomRotate90 with random group_element. Set group_element explicitly for TTA.",
+            )
+        return RandomRotate90(p=1, group_element=C4_INVERSE[self.group_element])
 
 
 class RotateInitSchema(BaseTransformInitSchema):

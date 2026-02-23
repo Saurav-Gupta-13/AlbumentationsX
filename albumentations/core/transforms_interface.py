@@ -283,6 +283,26 @@ class BasicTransform(Serializable, metaclass=CombinedMeta):
         """
         return self.params
 
+    def inverse(self) -> "BasicTransform":
+        """Return a new transform that is the mathematical inverse of this one.
+
+        Useful for TTA (Test-Time Augmentation): apply a deterministic transform to an image
+        before inference, then apply its inverse to the predicted mask to bring it back to
+        the original image space.
+
+        Only transforms that override ``inverse()`` support this operation, typically
+        group-based transforms with a fixed ``group_element`` (e.g., D4, RandomRotate90,
+        HorizontalFlip, VerticalFlip, Transpose).
+
+        Raises:
+            NotImplementedError: If the transform does not support inversion.
+
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support inverse(). "
+            "Only transforms that override `inverse()` can be used for TTA inversion.",
+        )
+
     def should_apply(self, force_apply: bool = False) -> bool:
         """Determine whether to apply the transform based on probability and force flag.
 

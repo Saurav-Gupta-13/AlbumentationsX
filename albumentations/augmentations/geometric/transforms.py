@@ -239,28 +239,6 @@ class Perspective(DualTransform):
             self.interpolation,
         )
 
-    @batch_transform("spatial")
-    def apply_to_images(self, images: ImageType, **params: Any) -> ImageType:
-        return self.apply(images, **params)
-
-    @batch_transform("spatial")
-    def apply_to_volumes(self, volumes: VolumeType, **params: Any) -> VolumeType:
-        """Apply the perspective transform to a batch of volumes.
-
-        Args:
-            volumes (np.ndarray): Batch of volumes to be distorted.
-            **params (Any): Additional parameters.
-
-        Returns:
-            np.ndarray: Batch of distorted volumes.
-
-        """
-        return self.apply(volumes, **params)
-
-    @batch_transform("spatial")
-    def apply_to_mask3d(self, mask3d: VolumeType, **params: Any) -> VolumeType:
-        return self.apply_to_mask(mask3d, **params)
-
     def apply_to_mask(
         self,
         mask: ImageType,
@@ -761,18 +739,6 @@ class Affine(DualTransform):
             scale,
             self.border_mode,
         )
-
-    @batch_transform("spatial")
-    def apply_to_images(self, images: ImageType, **params: Any) -> ImageType:
-        return self.apply(images, **params)
-
-    @batch_transform("spatial")
-    def apply_to_volumes(self, volumes: VolumeType, **params: Any) -> VolumeType:
-        return self.apply(volumes, **params)
-
-    @batch_transform("spatial")
-    def apply_to_mask3d(self, mask3d: VolumeType, **params: Any) -> VolumeType:
-        return self.apply_to_mask(mask3d, **params)
 
     @staticmethod
     def _get_scale(

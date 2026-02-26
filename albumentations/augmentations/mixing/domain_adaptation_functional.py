@@ -11,7 +11,16 @@ from typing import Literal
 
 import cv2
 import numpy as np
-from albucore import add_weighted, clip, clipped, from_float, get_num_channels, preserve_channel_dim, to_float, uint8_io
+from albucore import (
+    add_weighted,
+    clip,
+    clipped,
+    from_float,
+    get_num_channels,
+    preserve_channel_dim,
+    to_float,
+    uint8_io,
+)
 from typing_extensions import Protocol
 
 import albumentations.augmentations.geometric.functional as fgeometric
@@ -415,7 +424,7 @@ def adapt_pixel_distribution(
         ref = np.squeeze(ref)
 
     if img.shape != ref.shape:
-        ref = cv2.resize(ref, dsize=img.shape[:2], interpolation=cv2.INTER_AREA)
+        ref = fgeometric.resize(ref, img.shape[:2], cv2.INTER_AREA)
 
     original_dtype = img.dtype
 
@@ -578,7 +587,7 @@ def apply_histogram(img: ImageType, reference_image: ImageType, blend_ratio: flo
     """
     # Resize reference image only if necessary
     if img.shape[:2] != reference_image.shape[:2]:
-        reference_image = cv2.resize(reference_image, dsize=(img.shape[1], img.shape[0]))
+        reference_image = fgeometric.resize(reference_image, img.shape[:2], cv2.INTER_LINEAR)
 
     reference_image = reference_image.reshape(img.shape)
 

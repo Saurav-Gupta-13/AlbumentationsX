@@ -1705,7 +1705,7 @@ def downscale(
     """Downscale and upscale an image.
 
     This function downscales and upscales an image using the specified interpolation methods.
-    The downscaling and upscaling are performed using the cv2.resize function.
+    The downscaling and upscaling are performed using albucore.resize.
 
     Args:
         img (np.ndarray): Input image as a numpy array.
@@ -1719,14 +1719,8 @@ def downscale(
     """
     height, width = img.shape[:2]
 
-    downscaled = cv2.resize(
-        img,
-        None,
-        fx=scale,
-        fy=scale,
-        interpolation=down_interpolation,
-    )
-    return cv2.resize(downscaled, (width, height), interpolation=up_interpolation)
+    downscaled = fgeometric.resize(img, (int(height * scale), int(width * scale)), down_interpolation)
+    return fgeometric.resize(downscaled, (height, width), up_interpolation)
 
 
 def noop(input_obj: Any, **params: Any) -> Any:

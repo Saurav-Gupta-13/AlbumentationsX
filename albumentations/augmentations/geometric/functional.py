@@ -652,28 +652,99 @@ def perspective(
         np.ndarray: Perspective-transformed image.
 
     """
-    if not keep_size:
-        return warp_perspective(
-            img,
-            matrix,
+    return perspective_images(
+        np.expand_dims(img, axis=0),
+        matrix,
+        max_width,
+        max_height,
+        border_val,
+        border_mode,
+        keep_size,
+        interpolation,
+    )[0]
+
+
+def perspective_images(
+    images: np.ndarray,
+    matrix: np.ndarray,
+    max_width: int,
+    max_height: int,
+    border_val: float | list[float] | np.ndarray,
+    border_mode: int,
+    keep_size: bool,
+    interpolation: int,
+) -> np.ndarray:
+    """Apply perspective transformation to a batch of images.
+
+    Args:
+        images: Batch of images of shape (N, H, W, C).
+        matrix: 3x3 perspective transformation matrix.
+        max_width: Maximum width of the output image if keep_size is False.
+        max_height: Maximum height of the output image if keep_size is False.
+        border_val: Border value(s) to fill areas outside the transformed image.
+        border_mode: OpenCV border mode (e.g., cv2.BORDER_CONSTANT).
+        keep_size: If True, maintain the original image dimensions.
+        interpolation: Interpolation method for resampling (cv2 interpolation flag).
+
+    Returns:
+        Batch of perspective-transformed images with the same shape as input
+        when keep_size is True, or (N, max_height, max_width, C) when False.
+
+    """
+    height, width = images.shape[1], images.shape[2]
+    n = images.shape[0]
+    num_channels = 1 if images.ndim == 3 else images.shape[3]
+
+    if keep_size:
+        adjusted_matrix = np.array([[width / max_width, 0, 0], [0, height / max_height, 0], [0, 0, 1]]) @ matrix
+        dsize = (width, height)
+    else:
+        adjusted_matrix = matrix
+        dsize = (max_width, max_height)
+
+    if num_channels == 1:
+        # Small images: stack N frames → (H,W,N), one warp call (albucore C++ chunks avoid N crossings).
+        # Large images: per-frame warp (transpose copy cost > per-call savings).
+        _stack_px = 256 * 256
+        flat = images if images.ndim == 3 else images[:, :, :, 0]  # (N,H,W)
+        if height * width <= _stack_px:
+            stacked = np.ascontiguousarray(flat.transpose(1, 2, 0))  # (H,W,N)
+            border_scalar = border_val[0] if isinstance(border_val, (list, np.ndarray)) else border_val
+            warped = warp_perspective(
+                stacked,
+                adjusted_matrix,
+                dsize,
+                flags=interpolation,
+                border_mode=border_mode,
+                border_value=border_scalar,
+            )
+            out = np.moveaxis(warped, -1, 0)  # view (N,H',W')
+        else:
+            out = np.empty((n, dsize[1], dsize[0]), dtype=images.dtype)
+            for i in range(n):
+                warp_perspective(
+                    flat[i],
+                    adjusted_matrix,
+                    dsize,
+                    flags=interpolation,
+                    border_mode=border_mode,
+                    border_value=border_val,
+                    dst=out[i],
+                )
+        return out[:, :, :, np.newaxis] if images.ndim == 4 else out
+
+    result = np.empty((n, dsize[1], dsize[0], *images.shape[3:]), dtype=images.dtype)
+    for i in range(n):
+        warp_perspective(
+            images[i],
+            adjusted_matrix,
+            dsize,
             flags=interpolation,
             border_mode=border_mode,
-            dsize=(max_width, max_height),
             border_value=border_val,
+            dst=result[i],
         )
-    height, width = img.shape[:2]
-    scale_x = width / max_width
-    scale_y = height / max_height
-    scale_matrix = np.array([[scale_x, 0, 0], [0, scale_y, 0], [0, 0, 1]])
-    adjusted_matrix = np.dot(scale_matrix, matrix)
-    return warp_perspective(
-        img,
-        adjusted_matrix,
-        flags=interpolation,
-        border_mode=border_mode,
-        dsize=(width, height),
-        border_value=border_val,
-    )
+    return result
 
 
 @handle_empty_array("bboxes")

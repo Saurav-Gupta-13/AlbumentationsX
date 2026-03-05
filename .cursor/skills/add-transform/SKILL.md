@@ -107,7 +107,37 @@ class MyTransform(DualTransform):  # or ImageOnlyTransform / NoOp
 - Prefer **relative parameters** (fractions of image size) over fixed pixel values
 - Use **`ImageType`** for image/mask/volume type hints, `np.ndarray` only for bboxes/keypoints
 
-## 4. Export the transform
+## 4. Add batch optimization (`apply_to_images`)
+
+Override `apply_to_images` only if you can beat the default per-image loop. Priority patterns:
+
+**Pre-compute expensive setup once per batch** (kernels, LUTs, gradient maps):
+```python
+def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+    kernel = create_kernel(params["size"])  # once, not N times
+    return self._apply_to_batch(images, lambda img: convolve(img, kernel))
+```
+
+**Direct 4D indexing** for simple array ops:
+```python
+def apply_to_images(self, images: ImageType, channels_to_drop: list[int], **params: Any) -> ImageType:
+    result = images.copy()
+    result[:, :, :, channels_to_drop] = self.fill
+    return result
+```
+
+**Pre-allocated loop** as fallback when params vary per image:
+```python
+def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+    result = np.empty_like(images)
+    for i, image in enumerate(images):
+        result[i] = self.apply(image, **params)
+    return result
+```
+
+> **DO NOT** reshape `(N,H,W,1)` to `(H,W,N)` to call cv2 once — this is 2–4× slower in practice (transpose → non-contiguous copy + cv2 sequential channel processing).
+
+## 5. Export the transform
 
 Add to `albumentations/__init__.py`:
 ```python
@@ -116,7 +146,7 @@ from albumentations.augmentations.<module>.transforms import MyTransform
 
 Add to `albumentations/augmentations/<module>/__init__.py` if one exists.
 
-## 5. Write tests
+## 6. Write tests
 
 Add to `tests/test_transforms.py` or `tests/test_<category>.py`:
 
@@ -142,7 +172,7 @@ Also add it to the parametrized lists in `tests/utils.py`:
 
 Check edge cases: uint8, float32, single channel, multichannel.
 
-## 6. Verify checklist
+## 7. Verify checklist
 
 - [ ] No "Random" prefix in class name
 - [ ] `_range` suffix on range params
@@ -152,6 +182,7 @@ Check edge cases: uint8, float32, single channel, multichannel.
 - [ ] All random ops in `get_params` / `get_params_dependent_on_data`
 - [ ] Using `self.py_random` or `self.random_generator` (not `np.random` / `random`)
 - [ ] `ImageType` for image type hints
+- [ ] Custom `apply_to_images` if expensive setup can be shared across batch
 - [ ] Docstring has `Args`, `Targets`, `Image types`, `Examples` sections
 - [ ] Examples section uses plural "Examples" (not "Example")
 - [ ] Exported in `albumentations/__init__.py`

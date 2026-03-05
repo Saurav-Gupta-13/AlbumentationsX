@@ -413,7 +413,7 @@ class BasicTransform(Serializable, metaclass=CombinedMeta):
             ImageType: Transformed images as numpy array in the same format as input
 
         """
-        return self._apply_to_batch(images, lambda img: self.apply(img, **params), ensure_contiguous=True)
+        return self._apply_to_batch(images, lambda img: self.apply(img, **params))
 
     def apply_to_volume(self, volume: VolumeType, *args: Any, **params: Any) -> VolumeType:
         """Apply transform slice by slice to a volume.

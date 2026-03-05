@@ -3537,6 +3537,12 @@ class ColorJitter(ImageOnlyTransform):
                 img = fpixel.adjust_hue_torchvision(img, hue)
         return img
 
+    def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+        result = np.empty_like(images)
+        for i, image in enumerate(images):
+            result[i] = self.apply(image, **params)
+        return result
+
 
 class Sharpen(ImageOnlyTransform):
     """Sharpen the input image using either kernel-based or Gaussian interpolation method.
@@ -6064,6 +6070,21 @@ class Illumination(ImageOnlyTransform):
             sigma=params["sigma"],
         )
 
+    def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+        height, width = images.shape[1], images.shape[2]
+        gradient = fpixel.create_illumination_gradient(
+            height,
+            width,
+            self.mode,
+            params,
+        )
+        gradient = gradient[..., np.newaxis]
+
+        result = np.empty_like(images)
+        for i, image in enumerate(images):
+            result[i] = albucore.multiply_by_array(image, gradient)
+        return result
+
 
 class AutoContrast(ImageOnlyTransform):
     """Automatically adjust image contrast by stretching the intensity range.
@@ -6616,6 +6637,12 @@ class Dithering(ImageOnlyTransform):
             random_generator=self.random_generator,
         )
 
+    def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+        result = np.empty_like(images)
+        for i, image in enumerate(images):
+            result[i] = self.apply(image, **params)
+        return result
+
 
 class PhotoMetricDistort(ImageOnlyTransform):
     """Randomly distorts an image's photometric properties, as used in SSD object detection training.
@@ -6828,3 +6855,9 @@ class PhotoMetricDistort(ImageOnlyTransform):
         if channel_permutation is not None:
             img = fpixel.channel_shuffle(img, channel_permutation)
         return img
+
+    def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+        result = np.empty_like(images)
+        for i, image in enumerate(images):
+            result[i] = self.apply(image, **params)
+        return result

@@ -1368,6 +1368,10 @@ class Defocus(ImageOnlyTransform):
     ) -> ImageType:
         return fblur.defocus(img, radius, alias_blur)
 
+    def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+        kernel = fblur.create_defocus_kernel(params["radius"], params["alias_blur"])
+        return self._apply_to_batch(images, lambda img: fpixel.convolve(img, kernel))
+
     def get_params(self) -> dict[str, Any]:
         return {
             "radius": self.py_random.randint(*self.radius),

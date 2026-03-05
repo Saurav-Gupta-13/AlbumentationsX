@@ -421,6 +421,37 @@ class UniformParams(NoiseParamsBase):
 
 This rule is enforced by a pre-commit hook that will flag any violations during development.
 
+### Batch Performance (`apply_to_images`)
+
+Images in batch mode are always `(N, H, W, C)`. Never check `ndim == 4` — it's always true.
+
+Override `apply_to_images` when you can do better than the default per-image loop:
+
+1. **Pre-compute expensive setup once** (kernels, LUTs, gradient maps):
+
+```python
+def apply_to_images(self, images: ImageType, *args: Any, **params: Any) -> ImageType:
+    kernel = create_kernel(params["size"])  # once per batch
+    return self._apply_to_batch(images, lambda img: convolve(img, kernel))
+```
+
+2. **Direct 4D indexing** for simple array ops:
+
+```python
+result = images.copy()
+result[:, :, :, channels] = fill  # vectorized across N
+```
+
+3. **Pre-allocated loop** to avoid repeated allocations:
+
+```python
+result = np.empty_like(images)
+for i, image in enumerate(images):
+    result[i] = self.apply(image, **params)
+```
+
+> **Anti-pattern**: Do NOT reshape `(N,H,W,1)` to `(H,W,N)` to call a cv2 function once — transpose yields non-contiguous memory (requiring a full copy), and cv2 processes channels sequentially so an N-channel call is not faster than N single-channel calls. Benchmarks show 2–4× regression.
+
 ### Coordinate Systems
 
 #### Image Center Calculations

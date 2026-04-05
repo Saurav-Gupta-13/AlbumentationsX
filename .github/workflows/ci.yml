@@ -101,9 +101,19 @@ jobs:
         enable-cache: true
         python-version: ${{ matrix.python-version }}
         activate-environment: true
+    - name: Resolve headless OpenCV dependency from pyproject
+      run: |
+        python - <<'PY' >> "$GITHUB_ENV"
+        import re
+        from pathlib import Path
+
+        text = Path("pyproject.toml").read_text()
+        dep = re.search(r'^headless\s*=\s*\["([^"]+)"\]', text, re.MULTILINE).group(1)
+        print(f"OPENCV_HEADLESS_DEPENDENCY={dep}")
+        PY
     - name: Install all requirements
       run: |
-        uv pip install opencv-python-headless>=4.9.0.80 requests
+        uv pip install "${OPENCV_HEADLESS_DEPENDENCY}" requests
         uv pip install .
     - name: Run checks for documentation
       run: python -m tools.make_transforms_docs check README.md

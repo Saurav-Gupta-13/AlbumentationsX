@@ -72,6 +72,101 @@ def copy_and_paste_blend(
     return blended_image
 
 
+def _soft_blend_clip_high(base_image: np.ndarray, donor_image: np.ndarray) -> float:
+    """Choose the upper clip for soft alpha blends: 255 for uint8 inputs, and for floats either 1.0 or 255.0 based on
+    observed max channel values.
+    """
+    if base_image.dtype == np.uint8:
+        return 255.0
+    max_val = max(float(np.max(base_image)), float(np.max(donor_image)))
+    return 255.0 if max_val > 1.0 + 1e-3 else 1.0
+
+
+def blend_images_using_alpha(
+    base_image: np.ndarray,
+    donor_image: np.ndarray,
+    alpha: np.ndarray,
+) -> np.ndarray:
+    """Blend donor pixels onto base image using a float alpha mask, doing a hard copy where alpha == 1 and linear blend elsewhere.
+
+    Args:
+        base_image (np.ndarray): Target image (H, W, C).
+        donor_image (np.ndarray): Source image, same shape as base_image.
+        alpha (np.ndarray): Float mask (H, W) in [0, 1]. 1 = full donor, 0 = full base.
+
+    Returns:
+        np.ndarray: Blended image, same shape and dtype as base_image.
+
+    """
+    img_dtype = base_image.dtype
+
+    is_hard = np.all((alpha == 0) | (alpha == 1))
+    if is_hard:
+        result = base_image.copy()
+        paste_mask = alpha > 0
+        result[paste_mask] = donor_image[paste_mask]
+        return result
+
+    alpha_3d = alpha[..., np.newaxis].astype(np.float32)
+    blended = donor_image.astype(np.float32) * alpha_3d + base_image.astype(np.float32) * (1.0 - alpha_3d)
+    clip_high = _soft_blend_clip_high(base_image, donor_image)
+    return np.clip(blended, 0, clip_high).astype(img_dtype)
+
+
+def create_copy_paste_alpha(
+    instance_masks: np.ndarray,
+    blend_mode: str,
+    blend_sigma: float,
+) -> np.ndarray:
+    """Create a float alpha mask from the union of selected instance masks, with optional Gaussian blur for soft edges at boundaries.
+
+    Args:
+        instance_masks (np.ndarray): (K, H, W) binary masks of instances to paste.
+        blend_mode (str): "hard" for binary alpha, "gaussian" for soft edges.
+        blend_sigma (float): Sigma for gaussian blur (only used when blend_mode="gaussian").
+
+    Returns:
+        np.ndarray: Float alpha mask (H, W) in [0, 1].
+
+    """
+    alpha = np.any(instance_masks > 0, axis=0).astype(np.float32)
+
+    if blend_mode == "gaussian" and blend_sigma > 0:
+        kernel_size = int(np.ceil(blend_sigma * 6)) | 1
+        alpha = cv2.GaussianBlur(alpha, (kernel_size, kernel_size), blend_sigma)
+        np.clip(alpha, 0, 1, out=alpha)
+        # Drop numerical halo so low-opacity tails outside the true mask do not count as paste/occlusion.
+        alpha[alpha < 1e-3] = 0.0
+
+    return alpha
+
+
+def compute_instance_visibility(
+    existing_masks: np.ndarray,
+    paste_mask: np.ndarray,
+) -> np.ndarray:
+    """For each existing instance mask, compute the fraction of original foreground pixels that remain outside the
+    pasted binary union for CopyAndPaste survivor logic.
+
+    Args:
+        existing_masks (np.ndarray): (N, H, W) binary masks of existing instances.
+        paste_mask (np.ndarray): (H, W) binary mask of the pasted instance union (opaque region).
+
+    Returns:
+        np.ndarray: (N,) array of visibility ratios in [0, 1]. 1.0 = fully visible, 0.0 = fully occluded.
+
+    """
+    opaque_region = paste_mask > 0
+
+    original_areas = np.sum(existing_masks > 0, axis=(1, 2)).astype(np.float64)
+    occluded_areas = np.sum((existing_masks > 0) & opaque_region[np.newaxis], axis=(1, 2)).astype(np.float64)
+
+    remaining_areas = original_areas - occluded_areas
+
+    safe_areas = np.where(original_areas > 0, original_areas, 1.0)
+    return np.where(original_areas > 0, remaining_areas / safe_areas, 1.0)
+
+
 def calculate_mosaic_center_point(
     grid_yx: tuple[int, int],
     cell_shape: tuple[int, int],
@@ -396,6 +491,34 @@ def _preprocess_item_annotations(
     return original_data
 
 
+def preprocess_copy_paste_annotations(
+    item: dict[str, Any],
+    processor: BboxProcessor | KeypointsProcessor | None,
+    data_key: Literal["bboxes", "keypoints"],
+) -> np.ndarray | None:
+    """Preprocess bboxes or keypoints for a single donor item. Delegates to internal
+    annotation preprocessing with proper processor label encoding.
+    """
+    return _preprocess_item_annotations(item, processor, data_key)
+
+
+def _unpack_label_wrappers(item: dict[str, Any]) -> dict[str, Any]:
+    """Unpack `bbox_labels` and `keypoint_labels` wrapper dicts into top-level label fields so processors can find them directly.
+
+    Both Mosaic and CopyAndPaste store per-item label values under `bbox_labels` and
+    `keypoint_labels` (dicts mapping label-field-name → value). This helper flattens
+    them so that `_preprocess_item_annotations` can find the fields at the top level.
+    """
+    if "bbox_labels" not in item and "keypoint_labels" not in item:
+        return item
+    unpacked = {k: v for k, v in item.items() if k not in ("bbox_labels", "keypoint_labels")}
+    for wrapper_key in ("bbox_labels", "keypoint_labels"):
+        labels = item.get(wrapper_key)
+        if isinstance(labels, dict):
+            unpacked.update(labels)
+    return unpacked
+
+
 def preprocess_selected_mosaic_items(
     selected_raw_items: list[dict[str, Any]],
     bbox_processor: BboxProcessor | None,  # Allow None
@@ -414,8 +537,9 @@ def preprocess_selected_mosaic_items(
     result_data_items: list[ProcessedMosaicItem] = []
 
     for item in selected_raw_items:
-        processed_bboxes = _preprocess_item_annotations(item, bbox_processor, "bboxes")
-        processed_keypoints = _preprocess_item_annotations(item, keypoint_processor, "keypoints")
+        flat_item = _unpack_label_wrappers(item)
+        processed_bboxes = _preprocess_item_annotations(flat_item, bbox_processor, "bboxes")
+        processed_keypoints = _preprocess_item_annotations(flat_item, keypoint_processor, "keypoints")
 
         # Construct the final processed item dict
         processed_item_dict: ProcessedMosaicItem = {
@@ -576,18 +700,19 @@ def process_cell_geometry(
         raise ValueError(f"Invalid fit_mode: {fit_mode}. Must be 'cover' or 'contain'.")
 
     # Prepare input data for the pipeline
-    geom_input = {"image": item["image"]}
-    if item.get("mask") is not None:
-        geom_input["mask"] = item["mask"]
-    if item.get("bboxes") is not None:
-        # Compose expects bboxes in a specific format, ensure it's compatible
-        # Assuming item['bboxes'] is already preprocessed correctly
-        geom_input["bboxes"] = item["bboxes"]
-    if item.get("keypoints") is not None:
-        geom_input["keypoints"] = item["keypoints"]
+    geom_input: dict[str, Any] = {"image": item["image"]}
+    item_mask = item.get("mask")
+    if item_mask is not None:
+        geom_input["mask"] = item_mask
+    item_bboxes = item.get("bboxes")
+    if item_bboxes is not None:
+        geom_input["bboxes"] = item_bboxes
+    item_keypoints = item.get("keypoints")
+    if item_keypoints is not None:
+        geom_input["keypoints"] = item_keypoints
 
-    # Apply the pipeline
-    processed_item = geom_pipeline(**geom_input)
+    # Apply the pipeline (`force_apply` explicit so **geom_input cannot bind to it under mypy)
+    processed_item = geom_pipeline(force_apply=False, **geom_input)
 
     # Ensure output dict has the same structure as ProcessedMosaicItem
     # Compose might not return None for missing keys, handle explicitly

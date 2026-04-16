@@ -1642,3 +1642,162 @@ def test_sharpen_apply_to_volumes(dtype, method):
 
     expected = np.stack([transform(volume=volumes[i])["volume"] for i in range(volumes.shape[0])])
     np.testing.assert_array_equal(transformed, expected)
+
+
+@pytest.mark.parametrize("mode", ["edge", "detail"])
+def test_enhance_alpha_zero_is_identity(mode):
+    image = np.random.RandomState(137).randint(0, 256, (64, 64, 3), dtype=np.uint8)
+    transform = A.Compose([A.Enhance(mode=mode, alpha_range=(0.0, 0.0), p=1.0)])
+    np.testing.assert_array_equal(transform(image=image)["image"], image)
+
+
+@pytest.mark.parametrize("mode", ["edge", "detail"])
+def test_enhance_kernel_matches_pillow_preset(mode):
+    """alpha=1 must reproduce the Pillow preset kernel exactly (DC-preserving)."""
+    expected = {
+        "edge": np.array(
+            [[-0.5, -0.5, -0.5], [-0.5, 5.0, -0.5], [-0.5, -0.5, -0.5]],
+            dtype=np.float32,
+        ),
+        "detail": np.array(
+            [
+                [0.0, -1.0 / 6.0, 0.0],
+                [-1.0 / 6.0, 10.0 / 6.0, -1.0 / 6.0],
+                [0.0, -1.0 / 6.0, 0.0],
+            ],
+            dtype=np.float32,
+        ),
+    }[mode]
+    np.testing.assert_allclose(
+        fpixel.generate_enhance_matrix(mode, 1.0),
+        expected,
+        rtol=1e-6,
+    )
+    np.testing.assert_allclose(fpixel.generate_enhance_matrix(mode, 1.0).sum(), 1.0, rtol=1e-6)
+
+
+def test_enhance_edge_alpha_two_matches_edge_enhance_more():
+    """alpha=2 with mode=edge must reproduce Pillow's EDGE_ENHANCE_MORE kernel."""
+    expected = np.array(
+        [[-1.0, -1.0, -1.0], [-1.0, 9.0, -1.0], [-1.0, -1.0, -1.0]],
+        dtype=np.float32,
+    )
+    np.testing.assert_allclose(fpixel.generate_enhance_matrix("edge", 2.0), expected, rtol=1e-6)
+
+
+@pytest.mark.parametrize("mode", ["edge", "detail"])
+@pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+@pytest.mark.parametrize("num_channels", [1, 3, 5])
+def test_enhance_preserves_shape_and_dtype(mode, dtype, num_channels):
+    rng = np.random.RandomState(137)
+    shape = (64, 64) if num_channels == 1 else (64, 64, num_channels)
+    if dtype == np.uint8:
+        image = rng.randint(0, 256, shape, dtype=np.uint8)
+    else:
+        image = rng.random(shape).astype(np.float32)
+
+    transform = A.Compose([A.Enhance(mode=mode, alpha_range=(0.5, 1.5), p=1.0)])
+    result = transform(image=image)["image"]
+
+    assert result.shape == image.shape
+    assert result.dtype == image.dtype
+    if dtype == np.float32:
+        assert result.min() >= 0.0
+        assert result.max() <= 1.0
+
+
+@pytest.mark.parametrize("mode", ["edge", "detail"])
+@pytest.mark.parametrize("dtype", [np.uint8, np.float32])
+def test_enhance_apply_to_images_matches_per_image(mode, dtype):
+    rng = np.random.RandomState(137)
+    shape = (3, 48, 48, 3)
+    if dtype == np.uint8:
+        images = rng.randint(0, 256, shape, dtype=np.uint8)
+    else:
+        images = rng.random(shape).astype(np.float32)
+
+    transform = A.Compose([A.Enhance(mode=mode, alpha_range=(0.7, 0.7), p=1.0)])
+
+    batched = transform(images=images)["images"]
+    per_image = np.stack([transform(image=images[i])["image"] for i in range(images.shape[0])])
+
+    assert batched.shape == images.shape
+    assert batched.dtype == images.dtype
+    np.testing.assert_array_equal(batched, per_image)
+
+
+def test_enhance_invalid_mode_raises():
+    with pytest.raises(ValueError):
+        A.Enhance(mode="invalid", alpha_range=(0.5, 1.0), p=1.0)
+
+
+@pytest.mark.parametrize(
+    "alpha_range",
+    [
+        (-0.1, 0.5),  # negative lower bound
+        (1.0, 0.5),  # decreasing
+    ],
+)
+def test_enhance_invalid_alpha_range_raises(alpha_range):
+    with pytest.raises(ValueError):
+        A.Enhance(mode="edge", alpha_range=alpha_range, p=1.0)
+
+
+def test_enhance_invalid_mode_in_functional_raises():
+    """generate_enhance_matrix must raise ValueError (not KeyError) on bad mode."""
+    with pytest.raises(ValueError, match="Unsupported enhance mode"):
+        fpixel.generate_enhance_matrix("not_a_mode", 0.5)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("mode", ["edge", "detail"])
+def test_enhance_applied_config_resolves_range_to_scalar(mode):
+    """applied_config must record the *sampled* alpha (a scalar in alpha_range), not the range itself.
+
+    This enforces the contract documented on BasicTransform.get_applied_config:
+    "all constructor params and range params resolved to sampled scalar values".
+    """
+    image = np.random.RandomState(137).randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    alpha_range = (0.3, 0.9)
+    aug = A.Enhance(mode=mode, alpha_range=alpha_range, p=1.0)
+    aug(image=image)
+
+    sampled = aug.applied_config["alpha_range"]
+    assert isinstance(sampled, float), f"expected sampled scalar, got {type(sampled).__name__}: {sampled!r}"
+    assert alpha_range[0] <= sampled <= alpha_range[1]
+    # mode is already covered by the base init args; verify it's preserved
+    assert aug.applied_config["mode"] == mode
+
+
+@pytest.mark.parametrize(
+    ("mode", "alpha", "pil_filter_name"),
+    [
+        ("edge", 1.0, "EDGE_ENHANCE"),
+        ("edge", 2.0, "EDGE_ENHANCE_MORE"),
+        ("detail", 1.0, "DETAIL"),
+    ],
+)
+def test_enhance_matches_pillow_interior(mode, alpha, pil_filter_name):
+    """Enhance must reproduce PIL's preset on interior pixels (within 1 LSB).
+
+    Border pixels are excluded because cv2 defaults to BORDER_REFLECT_101 while
+    PIL uses replicate at borders. Integer-only kernel (EDGE_ENHANCE_MORE) is
+    bit-exact; fractional kernels can differ by 1 LSB due to rounding mode.
+    """
+    pytest.importorskip("PIL")
+    from PIL import Image, ImageFilter
+
+    image = np.random.RandomState(137).randint(0, 256, (96, 96, 3), dtype=np.uint8)
+
+    pil_filter = getattr(ImageFilter, pil_filter_name)
+    pil_out = np.array(Image.fromarray(image).filter(pil_filter))
+
+    transform = A.Compose([A.Enhance(mode=mode, alpha_range=(alpha, alpha), p=1.0)])
+    ours = transform(image=image)["image"]
+
+    pil_interior = pil_out[1:-1, 1:-1]
+    ours_interior = ours[1:-1, 1:-1]
+
+    diff = np.abs(pil_interior.astype(np.int16) - ours_interior.astype(np.int16))
+    assert diff.max() <= 1, f"max abs diff {diff.max()} exceeds 1 LSB tolerance vs PIL {pil_filter_name}"
+    if pil_filter_name == "EDGE_ENHANCE_MORE":
+        np.testing.assert_array_equal(pil_interior, ours_interior)

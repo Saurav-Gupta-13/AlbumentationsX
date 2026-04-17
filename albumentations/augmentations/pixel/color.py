@@ -48,6 +48,7 @@ __all__ = [
     "AutoContrast",
     "ChromaticAberration",
     "ColorJitter",
+    "Colorize",
     "Equalize",
     "FancyPCA",
     "HEStain",
@@ -1300,6 +1301,178 @@ class ToRGB(ImageOnlyTransform):
         return self.apply(volumes, **params)
 
 
+ColorRange = tuple[tuple[int, int, int], tuple[int, int, int]]
+
+
+def _validate_color_range(rng: ColorRange) -> ColorRange:
+    """Validate a Colorize anchor range: each entry is an RGB triple in [0, 255], and the lower
+    bound must not exceed the upper bound on any channel.
+    """
+    lo, hi = rng
+    if len(lo) != NUM_RGB_CHANNELS or len(hi) != NUM_RGB_CHANNELS:
+        raise ValueError(f"Color range must be (rgb_low, rgb_high) with 3 channels each, got {rng}")
+    for channel in range(NUM_RGB_CHANNELS):
+        if not (0 <= lo[channel] <= 255 and 0 <= hi[channel] <= 255):
+            raise ValueError(f"Color range entries must be in [0, 255], got {rng}")
+        if lo[channel] > hi[channel]:
+            raise ValueError(f"Color range lower bound must be <= upper bound per channel, got {rng}")
+    return rng
+
+
+class Colorize(ImageOnlyTransform):
+    """Map a single-channel grayscale image to a 2- or 3-color RGB gradient with per-call sampled
+    anchor colors (Pillow `ImageOps.colorize` style).
+
+    Intensity acts as a coordinate along a sampled color ramp:
+
+    - `0` maps to a sample from `black_range`
+    - `255` (or `1.0` for float32) maps to a sample from `white_range`
+    - if `mid_range` is set, intensity sampled from `mid_value_range` maps to a sample from
+      `mid_range` and the ramp becomes piecewise linear
+
+    Each anchor range is given as `(low_rgb, high_rgb)` and sampled per-channel uniformly on
+    every call. Pass identical low/high tuples to fix a color
+    (e.g. `black_range=((0, 0, 255), (0, 0, 255))`). Anchors are always specified in 0-255 RGB;
+    for float32 inputs they are rescaled to [0, 1] internally.
+
+    Args:
+        black_range (tuple[tuple[int, int, int], tuple[int, int, int]]): Inclusive per-channel
+            range from which the dark anchor is sampled. Default: ((0, 0, 0), (0, 0, 0)).
+        white_range (tuple[tuple[int, int, int], tuple[int, int, int]]): Inclusive per-channel
+            range from which the bright anchor is sampled.
+            Default: ((255, 255, 255), (255, 255, 255)).
+        mid_range (tuple[tuple[int, int, int], tuple[int, int, int]] | None): Optional inclusive
+            range from which the midpoint anchor is sampled. `None` disables 3-color mode.
+            Default: None.
+        mid_value_range (tuple[int, int]): Inclusive intensity range (each in 1-254) from which
+            the midpoint position is sampled. Ignored when `mid is None`. Default: (127, 127).
+        p (float): Probability of applying the transform. Default: 0.5.
+
+    Targets:
+        image, volume
+
+    Image types:
+        uint8, float32
+
+    Number of channels:
+        1
+
+    Note:
+        - Input must be single-channel; multi-channel input is a no-op with a warning.
+        - Interpolation is linear in RGB space.
+        - For uint8 inputs the per-call mapping is a (256, 3) LUT applied via `cv2.LUT`;
+          for float32 inputs `np.interp` is used per channel.
+
+    Examples:
+        >>> import numpy as np
+        >>> import albumentations as A
+        >>> image = np.random.randint(0, 256, (100, 100, 1), dtype=np.uint8)
+        >>>
+        >>> # Fixed blue -> yellow ramp (low == high)
+        >>> fixed = A.Compose([A.Colorize(
+        ...     black_range=((0, 0, 255), (0, 0, 255)),
+        ...     white_range=((255, 255, 0), (255, 255, 0)),
+        ...     p=1.0,
+        ... )])
+        >>> assert fixed(image=image)["image"].shape == (100, 100, 3)
+        >>>
+        >>> # Random thermal-ish ramp with random midpoint position
+        >>> random_thermal = A.Compose([A.Colorize(
+        ...     black_range=((0, 0, 64), (32, 0, 192)),
+        ...     mid_range=((96, 0, 96), (160, 64, 160)),
+        ...     white_range=((220, 160, 0), (255, 220, 32)),
+        ...     mid_value_range=(96, 160),
+        ...     p=1.0,
+        ... )])
+        >>> assert random_thermal(image=image)["image"].shape == (100, 100, 3)
+
+    """
+
+    class InitSchema(BaseTransformInitSchema):
+        black_range: Annotated[ColorRange, AfterValidator(_validate_color_range)]
+        white_range: Annotated[ColorRange, AfterValidator(_validate_color_range)]
+        mid_range: Annotated[ColorRange, AfterValidator(_validate_color_range)] | None
+        mid_value_range: Annotated[
+            tuple[int, int],
+            AfterValidator(check_range_bounds(1, 254)),
+            AfterValidator(nondecreasing),
+        ]
+
+    def __init__(
+        self,
+        black_range: tuple[tuple[int, int, int], tuple[int, int, int]] = ((0, 0, 0), (0, 0, 0)),
+        white_range: tuple[tuple[int, int, int], tuple[int, int, int]] = (
+            (255, 255, 255),
+            (255, 255, 255),
+        ),
+        mid_range: tuple[tuple[int, int, int], tuple[int, int, int]] | None = None,
+        mid_value_range: tuple[int, int] = (127, 127),
+        p: float = 0.5,
+    ):
+        super().__init__(p=p)
+        self.black_range = black_range
+        self.white_range = white_range
+        self.mid_range = mid_range
+        self.mid_value_range = mid_value_range
+
+    def _sample_color(self, color_range: ColorRange) -> tuple[int, int, int]:
+        lo, hi = color_range
+        return (
+            self.py_random.randint(lo[0], hi[0]),
+            self.py_random.randint(lo[1], hi[1]),
+            self.py_random.randint(lo[2], hi[2]),
+        )
+
+    def get_params(self) -> dict[str, Any]:
+        black_color = self._sample_color(self.black_range)
+        white_color = self._sample_color(self.white_range)
+        mid_color = self._sample_color(self.mid_range) if self.mid_range is not None else None
+        # `fpixel.colorize(..., mid=None, mid_value=...)` ignores `mid_value`, so don't waste
+        # an RNG draw or report a phantom sampled value when no midpoint anchor is configured.
+        if mid_color is not None:
+            mid_value = self.py_random.randint(*self.mid_value_range)
+            applied_mid_value: int | tuple[int, int] = mid_value
+        else:
+            mid_value = self.mid_value_range[0]
+            applied_mid_value = self.mid_value_range
+
+        # Resolve ranges to sampled scalars in applied_config (per BasicTransform contract).
+        self.applied_config["black_range"] = black_color
+        self.applied_config["white_range"] = white_color
+        self.applied_config["mid_range"] = mid_color
+        self.applied_config["mid_value_range"] = applied_mid_value
+
+        return {
+            "black_color": black_color,
+            "white_color": white_color,
+            "mid_color": mid_color,
+            "mid_value": mid_value,
+        }
+
+    def apply(
+        self,
+        img: ImageType,
+        black_color: tuple[int, int, int],
+        white_color: tuple[int, int, int],
+        mid_color: tuple[int, int, int] | None,
+        mid_value: int,
+        **params: Any,
+    ) -> ImageType:
+        if get_num_channels(img) != 1:
+            warnings.warn(
+                "Colorize expects a single-channel image; got a multi-channel image, returning it unchanged.",
+                stacklevel=2,
+            )
+            return img
+        return fpixel.colorize(img, black_color, white_color, mid_color, mid_value)
+
+    def apply_to_images(self, images: ImageType, **params: Any) -> ImageType:
+        return self.apply(images, **params)
+
+    def apply_to_volumes(self, volumes: VolumeType, **params: Any) -> VolumeType:
+        return self.apply(volumes, **params)
+
+
 class ToSepia(ImageOnlyTransform):
     """Apply sepia (brownish vintage) filter via fixed color matrix. Optional alpha for
     blending with original. Good for style or temporal variation in datasets.
@@ -2159,6 +2332,24 @@ class RGBShift(AdditiveNoise):
         self.g_shift_range = g_shift_range
         self.b_shift_range = b_shift_range
 
+    def get_params_dependent_on_data(
+        self,
+        params: dict[str, Any],
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = super().get_params_dependent_on_data(params=params, data=data)
+
+        # spatial_mode="constant" produces a (C,) noise_map of per-channel shifts already
+        # scaled to image dtype (uint8: [-255, 255], float: [-1, 1]). Record them as sampled scalars.
+        noise_map = result.get("noise_map")
+        if noise_map is not None and noise_map.size >= 3:
+            shifts = noise_map.reshape(-1)[:3].tolist()
+            self.applied_config["r_shift_range"] = float(shifts[0])
+            self.applied_config["g_shift_range"] = float(shifts[1])
+            self.applied_config["b_shift_range"] = float(shifts[2])
+
+        return result
+
 
 class PlasmaBrightnessContrast(ImageOnlyTransform):
     """Plasma fractal (Diamond-Square) pattern varies brightness and contrast spatially.
@@ -2685,16 +2876,24 @@ class Illumination(ImageOnlyTransform):
 
         intensity *= sign
 
+        # Always record all _range overrides so applied_config consistently reflects what was used,
+        # echoing the constructor range for params not active in this mode.
+        self.applied_config = {
+            "intensity_range": abs(intensity),
+            "angle_range": self.angle_range,
+            "center_range": self.center_range,
+            "sigma_range": self.sigma_range,
+        }
+
         if self.mode == "linear":
             angle = self.py_random.uniform(*self.angle_range)
-            self.applied_config = {"intensity_range": abs(intensity), "angle_range": angle}
+            self.applied_config["angle_range"] = angle
             return {
                 "intensity": intensity,
                 "angle": angle,
             }
         if self.mode == "corner":
             corner = self.py_random.randint(0, 3)  # Choose random corner
-            self.applied_config = {"intensity_range": abs(intensity)}
             return {
                 "intensity": intensity,
                 "corner": corner,
@@ -2703,7 +2902,8 @@ class Illumination(ImageOnlyTransform):
         x = self.py_random.uniform(*self.center_range)
         y = self.py_random.uniform(*self.center_range)
         sigma = self.py_random.uniform(*self.sigma_range)
-        self.applied_config = {"intensity_range": abs(intensity), "center_range": (x, y), "sigma_range": sigma}
+        self.applied_config["center_range"] = (x, y)
+        self.applied_config["sigma_range"] = sigma
         return {
             "intensity": intensity,
             "center": (x, y),

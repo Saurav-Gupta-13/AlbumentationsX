@@ -29,17 +29,13 @@ from albumentations.core.bbox_utils import (
 )
 from albumentations.core.pydantic import (
     check_range_bounds,
-    convert_to_1plus_int_range,
-    create_symmetric_range,
     nondecreasing,
-    process_non_negative_range,
 )
 from albumentations.core.transforms_interface import (
     BaseTransformInitSchema,
     DualTransform,
 )
 from albumentations.core.type_definitions import ALL_TARGETS, ImageType, VolumeType
-from albumentations.core.utils import to_tuple
 
 from . import functional as fgeometric
 
@@ -61,10 +57,9 @@ class Perspective(DualTransform):
     fill, interpolation. Supports image, mask, bboxes, keypoints.
 
     Args:
-        scale (float or tuple of float): Standard deviation of the normal distributions. These are used to sample
-            the random distances of the subimage's corners from the full image's corners.
-            If scale is a single float value, the range will be (0, scale).
-            Default: (0.05, 0.1).
+        scale (tuple of float): Standard deviation range `(low, high)` for the normal distribution
+            used to sample random corner displacements (as a fraction of image size).
+            Must be a non-decreasing 2-tuple of non-negative floats. Default: (0.05, 0.1).
         keep_size (bool): Whether to resize image back to its original size after applying the perspective transform.
             If set to False, the resulting images may end up having different shapes.
             Default: True.
@@ -155,8 +150,8 @@ class Perspective(DualTransform):
 
     class InitSchema(BaseTransformInitSchema):
         scale: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(process_non_negative_range),
+            tuple[float, float],
+            AfterValidator(check_range_bounds(0, None)),
             AfterValidator(nondecreasing),
         ]
         keep_size: bool
@@ -187,7 +182,7 @@ class Perspective(DualTransform):
 
     def __init__(
         self,
-        scale: tuple[float, float] | float = (0.05, 0.1),
+        scale: tuple[float, float] = (0.05, 0.1),
         keep_size: bool = True,
         fit_output: bool = False,
         interpolation: Literal[
@@ -216,7 +211,7 @@ class Perspective(DualTransform):
         p: float = 0.5,
     ):
         super().__init__(p)
-        self.scale = cast("tuple[float, float]", scale)
+        self.scale = scale
         self.keep_size = keep_size
         self.border_mode = border_mode
         self.fill = fill
@@ -375,53 +370,25 @@ class Affine(DualTransform):
     `mask_interpolation` deals with the method of interpolation used for this.
 
     Args:
-        scale (number, tuple of number or dict): Scaling factor to use, where `1.0` denotes "no change" and
-            `0.5` is zoomed out to `50` percent of the original size.
-                * If a single number, then that value will be used for all images.
-                * If a tuple `(a, b)`, then a value will be uniformly sampled per image from the interval `[a, b]`.
-                  That the same range will be used for both x- and y-axis. To keep the aspect ratio, set
-                  `keep_ratio=True`, then the same value will be used for both x- and y-axis.
-                * If a dictionary, then it is expected to have the keys `x` and/or `y`.
-                  Each of these keys can have the same values as described above.
-                  Using a dictionary allows to set different values for the two axis and sampling will then happen
-                  *independently* per axis, resulting in samples that differ between the axes. Note that when
-                  the `keep_ratio=True`, the x- and y-axis ranges should be the same.
-        translate_percent (None, number, tuple of number or dict): Translation as a fraction of the image height/width
-            (x-translation, y-translation), where `0` denotes "no change"
-            and `0.5` denotes "half of the axis size".
-                * If `None` then equivalent to `0.0` unless `translate_px` has a value other than `None`.
-                * If a single number, then that value will be used for all images.
-                * If a tuple `(a, b)`, then a value will be uniformly sampled per image from the interval `[a, b]`.
-                  That sampled fraction value will be used identically for both x- and y-axis.
-                * If a dictionary, then it is expected to have the keys `x` and/or `y`.
-                  Each of these keys can have the same values as described above.
-                  Using a dictionary allows to set different values for the two axis and sampling will then happen
-                  *independently* per axis, resulting in samples that differ between the axes.
-        translate_px (None, int, tuple of int or dict): Translation in pixels.
-                * If `None` then equivalent to `0` unless `translate_percent` has a value other than `None`.
-                * If a single int, then that value will be used for all images.
-                * If a tuple `(a, b)`, then a value will be uniformly sampled per image from
-                  the discrete interval `[a..b]`. That number will be used identically for both x- and y-axis.
-                * If a dictionary, then it is expected to have the keys `x` and/or `y`.
-                  Each of these keys can have the same values as described above.
-                  Using a dictionary allows to set different values for the two axis and sampling will then happen
-                  *independently* per axis, resulting in samples that differ between the axes.
-        rotate (number or tuple of number): Rotation in degrees (**NOT** radians), i.e. expected value range is
-            around `[-360, 360]`. Rotation happens around the *center* of the image,
-            not the top left corner as in some other frameworks.
-                * If a number, then that value will be used for all images.
-                * If a tuple `(a, b)`, then a value will be uniformly sampled per image from the interval `[a, b]`
-                  and used as the rotation value.
-        shear (number, tuple of number or dict): Shear in degrees (**NOT** radians), i.e. expected value range is
-            around `[-360, 360]`, with reasonable values being in the range of `[-45, 45]`.
-                * If a number, then that value will be used for all images as
-                  the shear on the x-axis (no shear on the y-axis will be done).
-                * If a tuple `(a, b)`, then two value will be uniformly sampled per image
-                  from the interval `[a, b]` and be used as the x- and y-shear value.
-                * If a dictionary, then it is expected to have the keys `x` and/or `y`.
-                  Each of these keys can have the same values as described above.
-                  Using a dictionary allows to set different values for the two axis and sampling will then happen
-                  *independently* per axis, resulting in samples that differ between the axes.
+        scale (tuple of number or dict): Scaling factor, where `1.0` denotes "no change".
+                * If a tuple `(a, b)`, then a value will be uniformly sampled per image from `[a, b]`
+                  and used identically for x- and y-axis.
+                * If a dict with keys `"x"` and/or `"y"`, each entry must itself be a `(a, b)` tuple.
+                  When `keep_ratio=True`, x and y ranges must be identical.
+        translate_percent (tuple of number or dict, optional): Translation as a fraction of image
+            size, where `0` denotes "no change" and `0.5` denotes "half the axis size".
+                * If `None`, equivalent to `0.0` unless `translate_px` is set.
+                * If a tuple `(a, b)`, sampled value applies to both x- and y-axis.
+                * If a dict with keys `"x"` and/or `"y"`, each entry must be a `(a, b)` tuple.
+                  Sampling happens independently per axis.
+        translate_px (tuple of int or dict, optional): Translation in pixels. Same shape rules
+            as `translate_percent`. If `None`, equivalent to `0` unless `translate_percent` is set.
+        rotate (tuple of number): Rotation in degrees (**NOT** radians) around image center.
+            A `(a, b)` tuple from which the rotation angle is uniformly sampled.
+        shear (tuple of number or dict): Shear in degrees (**NOT** radians).
+                * If a tuple `(a, b)`, used as `[a, b]` for both x- and y-shear.
+                * If a dict with keys `"x"` and/or `"y"`, each entry must be a `(a, b)` tuple.
+                  Sampling happens independently per axis.
         interpolation (int): OpenCV interpolation flag.
         mask_interpolation (int): OpenCV interpolation flag.
         fill (tuple[float, ...] | float): The constant value to use when filling in newly created pixels.
@@ -523,9 +490,9 @@ class Affine(DualTransform):
         >>> # Simpler example with only essential parameters
         >>> simple_transform = A.Compose([
         ...     A.Affine(
-        ...         scale=1.1,  # Single scalar value for scale
-        ...         rotate=15,  # Single scalar value for rotation (degrees)
-        ...         translate_px=30,  # Single scalar value for translation (pixels)
+        ...         scale=(1.1, 1.1),
+        ...         rotate=(15, 15),
+        ...         translate_px=(30, 30),
         ...         p=1.0
         ...     ),
         ... ])
@@ -538,11 +505,11 @@ class Affine(DualTransform):
     _supported_bbox_types: frozenset[str] = frozenset({"hbb", "obb"})
 
     class InitSchema(BaseTransformInitSchema):
-        scale: tuple[float, float] | float | dict[str, float | tuple[float, float]]
-        translate_percent: tuple[float, float] | float | dict[str, float | tuple[float, float]] | None
-        translate_px: tuple[int, int] | int | dict[str, int | tuple[int, int]] | None
-        rotate: tuple[float, float] | float
-        shear: tuple[float, float] | float | dict[str, float | tuple[float, float]]
+        scale: tuple[float, float] | dict[str, tuple[float, float]]
+        translate_percent: tuple[float, float] | dict[str, tuple[float, float]] | None
+        translate_px: tuple[int, int] | dict[str, tuple[int, int]] | None
+        rotate: tuple[float, float]
+        shear: tuple[float, float] | dict[str, tuple[float, float]]
         interpolation: Literal[
             cv2.INTER_NEAREST,
             cv2.INTER_LINEAR,
@@ -575,25 +542,17 @@ class Affine(DualTransform):
 
         @field_validator("shear", "scale")
         @classmethod
-        def _process_shear(
+        def _expand_shear_scale(
             cls,
-            value: tuple[float, float] | float | dict[str, float | tuple[float, float]],
+            value: tuple[float, float] | dict[str, tuple[float, float]],
             info: ValidationInfo,
         ) -> dict[str, tuple[float, float]]:
             return cls._handle_dict_arg(value, info.field_name)
 
-        @field_validator("rotate")
-        @classmethod
-        def _process_rotate(
-            cls,
-            value: tuple[float, float] | float,
-        ) -> tuple[float, float]:
-            return to_tuple(value, value)
-
         @model_validator(mode="after")
         def _handle_translate(self) -> Self:
             if self.translate_percent is None and self.translate_px is None:
-                self.translate_px = 0
+                self.translate_px = (0, 0)
 
             if self.translate_percent is not None and self.translate_px is not None:
                 msg = "Expected either translate_percent or translate_px to be provided, but both were provided."
@@ -603,14 +562,12 @@ class Affine(DualTransform):
                 self.translate_percent = self._handle_dict_arg(
                     self.translate_percent,
                     "translate_percent",
-                    default=0.0,
-                )  # type: ignore[assignment]
+                )
 
             if self.translate_px is not None:
                 self.translate_px = self._handle_dict_arg(
-                    self.translate_px,
+                    self.translate_px,  # type: ignore[arg-type]
                     "translate_px",
-                    default=0,
                 )  # type: ignore[assignment]
 
             return self
@@ -628,33 +585,27 @@ class Affine(DualTransform):
 
         @staticmethod
         def _handle_dict_arg(
-            val: tuple[float, float]
-            | dict[str, float | tuple[float, float]]
-            | float
-            | tuple[int, int]
-            | dict[str, int | tuple[int, int]],
+            val: tuple[float, float] | dict[str, tuple[float, float]],
             name: str | None,
-            default: float = 1.0,
         ) -> dict[str, tuple[float, float]]:
-            if isinstance(val, float):
-                return {"x": (val, val), "y": (val, val)}
             if isinstance(val, dict):
                 if "x" not in val and "y" not in val:
                     raise ValueError(
                         f'Expected {name} dictionary to contain at least key "x" or key "y". Found neither of them.',
                     )
-                x = val.get("x", default)
-                y = val.get("y", default)
-                return {"x": to_tuple(x, x), "y": to_tuple(y, y)}
-            return {"x": to_tuple(val, val), "y": to_tuple(val, val)}
+                default = val.get("x", val.get("y"))
+                x = tuple(val.get("x", default))  # type: ignore[arg-type]
+                y = tuple(val.get("y", default))  # type: ignore[arg-type]
+                return {"x": x, "y": y}  # type: ignore[dict-item]
+            return {"x": tuple(val), "y": tuple(val)}  # type: ignore[dict-item]
 
     def __init__(
         self,
-        scale: tuple[float, float] | float | dict[str, float | tuple[float, float]] = (1.0, 1.0),
-        translate_percent: tuple[float, float] | float | dict[str, float | tuple[float, float]] | None = None,
-        translate_px: tuple[int, int] | int | dict[str, int | tuple[int, int]] | None = None,
-        rotate: tuple[float, float] | float = 0.0,
-        shear: tuple[float, float] | float | dict[str, float | tuple[float, float]] = (0.0, 0.0),
+        scale: tuple[float, float] | dict[str, tuple[float, float]] = (1.0, 1.0),
+        translate_percent: tuple[float, float] | dict[str, tuple[float, float]] | None = None,
+        translate_px: tuple[int, int] | dict[str, tuple[int, int]] | None = None,
+        rotate: tuple[float, float] = (0.0, 0.0),
+        shear: tuple[float, float] | dict[str, tuple[float, float]] = (0.0, 0.0),
         interpolation: Literal[
             cv2.INTER_NEAREST,
             cv2.INTER_LINEAR,
@@ -694,7 +645,7 @@ class Affine(DualTransform):
         self.scale = cast("dict[str, tuple[float, float]]", scale)
         self.translate_percent = cast("dict[str, tuple[float, float]]", translate_percent)
         self.translate_px = cast("dict[str, tuple[int, int]]", translate_px)
-        self.rotate = cast("tuple[float, float]", rotate)
+        self.rotate = rotate
         self.fit_output = fit_output
         self.shear = cast("dict[str, tuple[float, float]]", shear)
         self.keep_ratio = keep_ratio
@@ -938,15 +889,11 @@ class ShiftScaleRotate(Affine):
     for pose or scale augmentation without separate transforms.
 
     Args:
-        shift_limit ((float, float) or float): shift factor range for both height and width. If shift_limit
-            is a single float value, the range will be (-shift_limit, shift_limit). Absolute values for lower and
-            upper bounds should lie in range [-1, 1]. Default: (-0.0625, 0.0625).
-        scale_limit ((float, float) or float): scaling factor range. If scale_limit is a single float value, the
-            range will be (-scale_limit, scale_limit). Note that the scale_limit will be biased by 1.
-            If scale_limit is a tuple, like (low, high), sampling will be done from the range (1 + low, 1 + high).
-            Default: (-0.1, 0.1).
-        rotate_limit ((int, int) or int): rotation range. If rotate_limit is a single int value, the
-            range will be (-rotate_limit, rotate_limit). Default: (-45, 45).
+        shift_range (tuple of float): shift factor range `(low, high)` for both height and width.
+            Absolute values must lie in [-1, 1]. Default: (-0.0625, 0.0625).
+        scale_range (tuple of float): scaling factor range `(low, high)`. Note that this range
+            is biased by 1, so sampling happens from `(1 + low, 1 + high)`. Default: (-0.1, 0.1).
+        rotate_range (tuple of int): rotation range `(low, high)`. Default: (-45, 45).
         interpolation (OpenCV flag): flag that is used to specify the interpolation algorithm. Should be one of:
             cv2.INTER_NEAREST, cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_AREA, cv2.INTER_LANCZOS4.
             Default: cv2.INTER_LINEAR.
@@ -955,14 +902,10 @@ class ShiftScaleRotate(Affine):
             Default: cv2.BORDER_CONSTANT
         fill (tuple[float, ...] | float): padding value if border_mode is cv2.BORDER_CONSTANT.
         fill_mask (tuple[float, ...] | float): padding value if border_mode is cv2.BORDER_CONSTANT applied for masks.
-        shift_limit_x ((float, float) or float): shift factor range for width. If it is set then this value
-            instead of shift_limit will be used for shifting width.  If shift_limit_x is a single float value,
-            the range will be (-shift_limit_x, shift_limit_x). Absolute values for lower and upper bounds should lie in
-            the range [-1, 1]. Default: None.
-        shift_limit_y ((float, float) or float): shift factor range for height. If it is set then this value
-            instead of shift_limit will be used for shifting height.  If shift_limit_y is a single float value,
-            the range will be (-shift_limit_y, shift_limit_y). Absolute values for lower and upper bounds should lie
-            in the range [-, 1]. Default: None.
+        shift_range_x (tuple of float, optional): shift factor range `(low, high)` for width. If set,
+            overrides `shift_range` along the x-axis. Absolute values must lie in [-1, 1].
+        shift_range_y (tuple of float, optional): shift factor range `(low, high)` for height. If set,
+            overrides `shift_range` along the y-axis. Absolute values must lie in [-1, 1].
         rotate_method (str): rotation method used for the bounding boxes. Should be one of "largest_box" or "ellipse".
             Default: "largest_box"
         mask_interpolation (OpenCV flag): Flag that is used to specify the interpolation algorithm for mask.
@@ -995,9 +938,9 @@ class ShiftScaleRotate(Affine):
         >>> # Define transform with parameters as tuples when possible
         >>> transform = A.Compose([
         ...     A.ShiftScaleRotate(
-        ...         shift_limit=(-0.0625, 0.0625),
-        ...         scale_limit=(-0.1, 0.1),
-        ...         rotate_limit=(-45, 45),
+        ...         shift_range=(-0.0625, 0.0625),
+        ...         scale_range=(-0.1, 0.1),
+        ...         rotate_range=(-45, 45),
         ...         interpolation=cv2.INTER_LINEAR,
         ...         border_mode=cv2.BORDER_CONSTANT,
         ...         rotate_method="largest_box",
@@ -1029,18 +972,9 @@ class ShiftScaleRotate(Affine):
     _targets = ALL_TARGETS
 
     class InitSchema(BaseTransformInitSchema):
-        shift_limit: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(create_symmetric_range),
-        ]
-        scale_limit: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(create_symmetric_range),
-        ]
-        rotate_limit: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(create_symmetric_range),
-        ]
+        shift_range: tuple[float, float]
+        scale_range: tuple[float, float]
+        rotate_range: tuple[float, float]
         interpolation: Literal[
             cv2.INTER_NEAREST,
             cv2.INTER_LINEAR,
@@ -1060,8 +994,8 @@ class ShiftScaleRotate(Affine):
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
 
-        shift_limit_x: tuple[float, float] | float | None
-        shift_limit_y: tuple[float, float] | float | None
+        shift_range_x: tuple[float, float] | None
+        shift_range_y: tuple[float, float] | None
         rotate_method: Literal["largest_box", "ellipse"]
         mask_interpolation: Literal[
             cv2.INTER_NEAREST,
@@ -1072,36 +1006,34 @@ class ShiftScaleRotate(Affine):
         ]
 
         @model_validator(mode="after")
-        def _check_shift_limit(self) -> Self:
+        def _check_shift_range(self) -> Self:
             bounds = -1, 1
-            self.shift_limit_x = to_tuple(
-                self.shift_limit_x if self.shift_limit_x is not None else self.shift_limit,
-            )
-            check_range(self.shift_limit_x, *bounds, "shift_limit_x")
-            self.shift_limit_y = to_tuple(
-                self.shift_limit_y if self.shift_limit_y is not None else self.shift_limit,
-            )
-            check_range(self.shift_limit_y, *bounds, "shift_limit_y")
+            if self.shift_range_x is None:
+                self.shift_range_x = self.shift_range
+            check_range(self.shift_range_x, *bounds, "shift_range_x")
+            if self.shift_range_y is None:
+                self.shift_range_y = self.shift_range
+            check_range(self.shift_range_y, *bounds, "shift_range_y")
 
             return self
 
-        @field_validator("scale_limit")
+        @field_validator("scale_range")
         @classmethod
-        def _check_scale_limit(
+        def _check_scale_range(
             cls,
-            value: tuple[float, float] | float,
+            value: tuple[float, float],
             info: ValidationInfo,
         ) -> tuple[float, float]:
             bounds = 0, float("inf")
-            result = to_tuple(value, bias=1.0)
+            result = (1.0 + value[0], 1.0 + value[1])
             check_range(result, *bounds, str(info.field_name))
             return result
 
     def __init__(
         self,
-        shift_limit: tuple[float, float] | float = (-0.0625, 0.0625),
-        scale_limit: tuple[float, float] | float = (-0.1, 0.1),
-        rotate_limit: tuple[float, float] | float = (-45, 45),
+        shift_range: tuple[float, float] = (-0.0625, 0.0625),
+        scale_range: tuple[float, float] = (-0.1, 0.1),
+        rotate_range: tuple[float, float] = (-45, 45),
         interpolation: Literal[
             cv2.INTER_NEAREST,
             cv2.INTER_LINEAR,
@@ -1116,8 +1048,8 @@ class ShiftScaleRotate(Affine):
             cv2.BORDER_WRAP,
             cv2.BORDER_REFLECT_101,
         ] = cv2.BORDER_CONSTANT,
-        shift_limit_x: tuple[float, float] | float | None = None,
-        shift_limit_y: tuple[float, float] | float | None = None,
+        shift_range_x: tuple[float, float] | None = None,
+        shift_range_y: tuple[float, float] | None = None,
         rotate_method: Literal["largest_box", "ellipse"] = "largest_box",
         mask_interpolation: Literal[
             cv2.INTER_NEAREST,
@@ -1130,12 +1062,10 @@ class ShiftScaleRotate(Affine):
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 0.5,
     ):
-        shift_limit_x = cast("tuple[float, float]", shift_limit_x)
-        shift_limit_y = cast("tuple[float, float]", shift_limit_y)
         super().__init__(
-            scale=scale_limit,
-            translate_percent={"x": shift_limit_x, "y": shift_limit_y},
-            rotate=rotate_limit,
+            scale=scale_range,
+            translate_percent={"x": shift_range_x, "y": shift_range_y},  # type: ignore[dict-item]
+            rotate=rotate_range,
             shear=(0, 0),
             interpolation=interpolation,
             mask_interpolation=mask_interpolation,
@@ -1152,21 +1082,21 @@ class ShiftScaleRotate(Affine):
             UserWarning,
             stacklevel=2,
         )
-        self.shift_limit_x = shift_limit_x
-        self.shift_limit_y = shift_limit_y
+        self.shift_range_x = shift_range_x
+        self.shift_range_y = shift_range_y
 
-        self.scale_limit = cast("tuple[float, float]", scale_limit)
-        self.rotate_limit = cast("tuple[int, int]", rotate_limit)
+        self.scale_range = scale_range
+        self.rotate_range = rotate_range
         self.border_mode = border_mode
         self.fill = fill
         self.fill_mask = fill_mask
 
     def get_transform_init_args(self) -> dict[str, Any]:
         return {
-            "shift_limit_x": self.shift_limit_x,
-            "shift_limit_y": self.shift_limit_y,
-            "scale_limit": to_tuple(self.scale_limit, bias=-1.0),
-            "rotate_limit": self.rotate_limit,
+            "shift_range_x": self.shift_range_x,
+            "shift_range_y": self.shift_range_y,
+            "scale_range": (self.scale_range[0] - 1.0, self.scale_range[1] - 1.0),
+            "rotate_range": self.rotate_range,
             "interpolation": self.interpolation,
             "border_mode": self.border_mode,
             "fill": self.fill,
@@ -1627,7 +1557,7 @@ class Morphological(DualTransform):
         >>>
         >>> # Example 1: Apply dilation to thicken text and fill gaps
         >>> dilation_transform = A.Morphological(
-        ...     scale=3,               # Size of the structuring element
+        ...     scale=(3, 3),          # Width and height of the structuring element
         ...     operation="dilation",  # Expand white regions (or black if inverted)
         ...     p=1.0                  # Always apply
         ... )
@@ -1637,7 +1567,7 @@ class Morphological(DualTransform):
         >>>
         >>> # Example 2: Apply erosion to thin text or remove noise
         >>> erosion_transform = A.Morphological(
-        ...     scale=(2, 3),          # Random kernel size between 2 and 3
+        ...     scale=(2, 3),          # Width and height of the structuring element
         ...     operation="erosion",   # Shrink white regions (or expand black if inverted)
         ...     p=1.0                  # Always apply
         ... )
@@ -1654,20 +1584,20 @@ class Morphological(DualTransform):
 
     class InitSchema(BaseTransformInitSchema):
         scale: Annotated[
-            tuple[int, int] | int,
-            AfterValidator(convert_to_1plus_int_range),
+            tuple[int, int],
+            AfterValidator(check_range_bounds(1)),
             AfterValidator(check_range_bounds(1, None)),
         ]
         operation: Literal["erosion", "dilation"]
 
     def __init__(
         self,
-        scale: tuple[int, int] | int = (2, 3),
+        scale: tuple[int, int] = (2, 3),
         operation: Literal["erosion", "dilation"] = "dilation",
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.scale = cast("tuple[int, int]", scale)
+        self.scale = scale
         self.operation = operation
 
     def apply(

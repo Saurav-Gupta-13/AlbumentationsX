@@ -23,7 +23,6 @@ from albumentations.core.composition import (
     SomeOf,
 )
 from albumentations.core.transforms_interface import DualTransform, ImageOnlyTransform, NoOp
-from albumentations.core.utils import to_tuple
 from tests.conftest import (
     IMAGES,
     SQUARE_UINT8_IMAGE,
@@ -116,23 +115,6 @@ def test_sequential(target_as_params):
     image = np.ones((8, 8))
     augmentation(image=image)
     assert len([transform for transform in transforms if transform.called]) == len(transforms)
-
-
-@pytest.mark.parametrize(
-    "input,kwargs,expected",
-    [
-        (10, {}, (-10, 10)),
-        (0.5, {}, (-0.5, 0.5)),
-        ((-20, 20), {}, (-20, 20)),
-        ([-20, 20], {}, (-20, 20)),
-        ((1, 2), {"low": 1}, (1, 2)),
-        (100, {"low": 30}, (30, 100)),
-        (10, {"bias": 1}, (-9, 11)),
-        (100, {"bias": 2}, (-98, 102)),
-    ],
-)
-def test_to_tuple(input, kwargs, expected):
-    assert to_tuple(input, **kwargs) == expected
 
 
 @pytest.mark.parametrize("image", IMAGES)
@@ -1525,8 +1507,8 @@ def test_transform_tracking(image, transforms, expected_names):
 @pytest.mark.parametrize(
     ["transform_class", "transform_params"],
     [
-        (A.Blur, {"blur_limit": 3}),
-        (A.RandomBrightnessContrast, {"brightness_limit": 0.2, "contrast_limit": 0.2}),
+        (A.Blur, {"blur_range": (3, 3)}),
+        (A.RandomBrightnessContrast, {"brightness_range": (-0.2, 0.2), "contrast_range": (-0.2, 0.2)}),
         (A.HorizontalFlip, {}),
     ],
 )
@@ -1608,9 +1590,9 @@ def test_transform_valid_params_no_warning():
     # Test that no warning/error is raised for valid parameters
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # Convert warnings to errors to ensure none are raised
-        transform = A.Blur(p=0.7, blur_limit=(3, 5))
+        transform = A.Blur(p=0.7, blur_range=(3, 5))
         assert transform.p == 0.7
-        assert transform.blur_limit == (3, 5)
+        assert transform.blur_range == (3, 5)
 
 
 def test_transform_multiple_invalid_params():
@@ -1621,9 +1603,9 @@ def test_transform_multiple_invalid_params():
 
 def test_transform_strict_with_valid_params():
     # Test that strict mode doesn't affect valid parameters
-    transform = A.Blur(strict=True, p=0.7, blur_limit=(3, 5))
+    transform = A.Blur(strict=True, p=0.7, blur_range=(3, 5))
     assert transform.p == 0.7
-    assert transform.blur_limit == (3, 5)
+    assert transform.blur_range == (3, 5)
 
 
 @pytest.mark.parametrize(
@@ -1798,9 +1780,9 @@ def test_transform_valid_params_no_warning():
     # Test that no warning/error is raised for valid parameters
     with warnings.catch_warnings():
         warnings.simplefilter("error")  # Convert warnings to errors to ensure none are raised
-        transform = A.Blur(p=0.7, blur_limit=(3, 5))
+        transform = A.Blur(p=0.7, blur_range=(3, 5))
         assert transform.p == 0.7
-        assert transform.blur_limit == (3, 5)
+        assert transform.blur_range == (3, 5)
 
 
 def test_transform_multiple_invalid_params():
@@ -1811,9 +1793,9 @@ def test_transform_multiple_invalid_params():
 
 def test_transform_strict_with_valid_params():
     # Test that strict mode doesn't affect valid parameters
-    transform = A.Blur(strict=True, p=0.7, blur_limit=(3, 5))
+    transform = A.Blur(strict=True, p=0.7, blur_range=(3, 5))
     assert transform.p == 0.7
-    assert transform.blur_limit == (3, 5)
+    assert transform.blur_range == (3, 5)
 
 
 @pytest.mark.parametrize(
@@ -1900,15 +1882,15 @@ def test_mask_interpolation(augmentation_cls, params, border_mode, image):
     "params, strict, expected_outcome, expected_error_params",
     [
         # Valid cases
-        ({"rotate": 45}, False, "valid", []),
-        ({"rotate": 45, "p": 0.5}, False, "valid", []),
+        ({"rotate": (45, 45)}, False, "valid", []),
+        ({"rotate": (45, 45), "p": 0.5}, False, "valid", []),
         # Invalid parameter names (affected by strict)
-        ({"rotate": 45, "invalid_param": 123}, False, "warning", []),
-        ({"rotate": 45, "invalid_param": 123}, True, "error", ["invalid_param"]),
-        ({"rotate": 45, "wrong_param": 0.5, "bad_param": 30}, False, "warning", []),
+        ({"rotate": (45, 45), "invalid_param": 123}, False, "warning", []),
+        ({"rotate": (45, 45), "invalid_param": 123}, True, "error", ["invalid_param"]),
+        ({"rotate": (45, 45), "wrong_param": 0.5, "bad_param": 30}, False, "warning", []),
         # Invalid parameter values (always error, regardless of strict)
-        ({"rotate": 45, "p": 1.5}, False, "value_error", ["p"]),
-        ({"rotate": 45, "p": -0.5}, False, "value_error", ["p"]),
+        ({"rotate": (45, 45), "p": 1.5}, False, "value_error", ["p"]),
+        ({"rotate": (45, 45), "p": -0.5}, False, "value_error", ["p"]),
         # Multiple invalid values
         (
             {"interpolation": -1, "mask_interpolation": -1, "p": 1.5},
@@ -2310,7 +2292,7 @@ def test_uint8_grayscale_handling():
     transform = A.Compose(
         [
             A.HorizontalFlip(p=1.0),
-            A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=1.0),
+            A.RandomBrightnessContrast(brightness_range=(-0.2, 0.2), contrast_range=(-0.2, 0.2), p=1.0),
         ],
     )
 
@@ -2419,7 +2401,7 @@ def test_grayscale_mask_handling():
     transform = A.Compose(
         [
             A.HorizontalFlip(p=1.0),
-            A.Rotate(limit=45, p=1.0),
+            A.Rotate(angle_range=(-45, 45), p=1.0),
         ],
     )
 
@@ -2441,7 +2423,7 @@ def test_grayscale_masks_batch_handling():
     transform = A.Compose(
         [
             A.HorizontalFlip(p=1.0),
-            A.Rotate(limit=45, p=1.0),
+            A.Rotate(angle_range=(-45, 45), p=1.0),
         ],
     )
 
@@ -2912,7 +2894,7 @@ def test_applied_config_contains_p(aug_cls, params):
 def test_applied_config_empty_when_skipped():
     """applied_config is empty when transform is skipped (p=0)."""
     image = _make_test_image()
-    aug = A.Blur(blur_limit=(3, 7), p=0.0)
+    aug = A.Blur(blur_range=(3, 7), p=0.0)
     aug(image=image)
     assert aug.applied_config == {}
 
@@ -2920,7 +2902,7 @@ def test_applied_config_empty_when_skipped():
 def test_applied_config_reset_between_calls():
     """applied_config from previous call doesn't bleed into skipped call."""
     image = _make_test_image()
-    aug = A.Blur(blur_limit=(3, 7), p=1.0)
+    aug = A.Blur(blur_range=(3, 7), p=1.0)
     aug(image=image)
     assert aug.applied_config  # was applied
 
@@ -2949,9 +2931,9 @@ def test_from_applied_transforms_reproduces_output():
     pipeline = A.Compose(
         [
             A.HorizontalFlip(p=0.5),
-            A.Blur(blur_limit=(3, 7), p=1.0),
-            A.RandomBrightnessContrast(brightness_limit=(-0.3, 0.3), contrast_limit=(-0.3, 0.3), p=1.0),
-            A.Rotate(limit=(-45, 45), p=1.0),
+            A.Blur(blur_range=(3, 7), p=1.0),
+            A.RandomBrightnessContrast(brightness_range=(-0.3, 0.3), contrast_range=(-0.3, 0.3), p=1.0),
+            A.Rotate(angle_range=(-45, 45), p=1.0),
         ],
         save_applied_params=True,
         seed=137,
@@ -3085,7 +3067,7 @@ def test_applied_config_mask_dropout():
     mask[10:40, 10:40, 0] = 1
     mask[60:90, 60:90, 0] = 1
 
-    aug = A.MaskDropout(max_objects=(1, 2), p=1.0)
+    aug = A.MaskDropout(max_objects_range=(1, 2), p=1.0)
     aug(image=image, mask=mask)
     _assert_applied_config_valid(aug)
 
@@ -3130,7 +3112,7 @@ def test_applied_config_fda():
     image = _make_test_image()
     reference = np.random.default_rng(42).integers(0, 256, (100, 100, 3), dtype=np.uint8)
 
-    aug = A.FDA(beta_limit=(0.05, 0.1), p=1.0)
+    aug = A.FDA(beta_range=(0.05, 0.1), p=1.0)
     aug(image=image, fda_metadata=[reference])
     _assert_applied_config_valid(aug)
 
@@ -3156,18 +3138,12 @@ def test_applied_config_pixel_distribution_adaptation():
 # init_kwargs MUST set the range parameter to a non-degenerate range
 # (low != high) so we can distinguish "scalar sample" from "original tuple".
 SINGLE_SAMPLE_RANGE_RESOLUTIONS: list[tuple[type, str, dict[str, Any]]] = [
-    (A.Blur, "blur_limit", {"blur_limit": (3, 9)}),
-    (A.GaussianBlur, "blur_limit", {"blur_limit": (3, 9)}),
-    (A.MedianBlur, "blur_limit", {"blur_limit": (3, 9)}),
-    (A.MotionBlur, "blur_limit", {"blur_limit": (3, 9)}),
+    (A.Blur, "blur_range", {"blur_range": (3, 9)}),
+    (A.GaussianBlur, "blur_range", {"blur_range": (3, 9)}),
+    (A.MedianBlur, "blur_range", {"blur_range": (3, 9)}),
+    (A.MotionBlur, "blur_range", {"blur_range": (3, 9)}),
     (A.Enhance, "alpha_range", {"alpha_range": (0.3, 0.9)}),
     (A.PlasmaShadow, "shadow_intensity_range", {"shadow_intensity_range": (0.2, 0.8)}),
-    (A.PixelSpread, "map_resolution_range", {"radius": 2, "map_resolution_range": (0.3, 0.7)}),
-    (A.ElasticTransform, "map_resolution_range", {"map_resolution_range": (0.3, 0.7)}),
-    (A.GridDistortion, "map_resolution_range", {"map_resolution_range": (0.3, 0.7)}),
-    (A.OpticalDistortion, "map_resolution_range", {"map_resolution_range": (0.3, 0.7)}),
-    (A.PiecewiseAffine, "map_resolution_range", {"map_resolution_range": (0.3, 0.7)}),
-    (A.ThinPlateSpline, "map_resolution_range", {"map_resolution_range": (0.3, 0.7)}),
 ]
 
 

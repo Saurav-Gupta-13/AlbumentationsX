@@ -128,7 +128,7 @@ def test_obb_rotation_centered_square_box_square_image(rotation_deg: int) -> Non
 
     transform = A.Compose(
         [
-            A.Rotate(limit=(rotation_deg, rotation_deg), p=1.0),
+            A.Rotate(angle_range=(rotation_deg, rotation_deg), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -188,7 +188,7 @@ def test_obb_rotation_centered_rectangular_box_square_image(rotation_deg: int) -
 
     transform = A.Compose(
         [
-            A.Rotate(limit=(rotation_deg, rotation_deg), p=1.0),
+            A.Rotate(angle_range=(rotation_deg, rotation_deg), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -234,7 +234,7 @@ def test_obb_rotation_with_initial_angle(rotation_deg: int, initial_angle: float
 
     transform = A.Compose(
         [
-            A.Rotate(limit=(rotation_deg, rotation_deg), p=1.0),
+            A.Rotate(angle_range=(rotation_deg, rotation_deg), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -281,7 +281,7 @@ def test_obb_rotation_offset_box(offset_x: float, offset_y: float, rotation_deg:
 
     transform = A.Compose(
         [
-            A.Rotate(limit=(rotation_deg, rotation_deg), p=1.0),
+            A.Rotate(angle_range=(rotation_deg, rotation_deg), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -754,7 +754,7 @@ def test_obb_identity_transform() -> None:
 
     transform = A.Compose(
         [
-            A.Affine(scale=1.0, rotate=0, translate_px={"x": 0, "y": 0}, p=1.0),
+            A.Affine(scale=(1.0, 1.0), rotate=(0, 0), translate_px={"x": (0, 0), "y": (0, 0)}, p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -790,7 +790,7 @@ def test_obb_360_rotation_is_identity() -> None:
 
     transform = A.Compose(
         [
-            A.Rotate(limit=(360, 360), p=1.0),
+            A.Rotate(angle_range=(360, 360), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -828,7 +828,7 @@ def test_obb_combined_flip_and_rotate_centered() -> None:
     transform = A.Compose(
         [
             A.HorizontalFlip(p=1.0),
-            A.Rotate(limit=(90, 90), p=1.0),
+            A.Rotate(angle_range=(90, 90), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -878,9 +878,9 @@ def test_obb_multiple_rotations_accumulate() -> None:
     # Rotate by 30° three times
     transform = A.Compose(
         [
-            A.Rotate(limit=(30, 30), p=1.0),
-            A.Rotate(limit=(30, 30), p=1.0),
-            A.Rotate(limit=(30, 30), p=1.0),
+            A.Rotate(angle_range=(30, 30), p=1.0),
+            A.Rotate(angle_range=(30, 30), p=1.0),
+            A.Rotate(angle_range=(30, 30), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )
@@ -934,10 +934,10 @@ def test_obb_affine_pure_translation(translate_x: float, translate_y: float) -> 
     transform = A.Compose(
         [
             A.Affine(
-                scale=1.0,
-                rotate=0,
-                translate_percent={"x": translate_x, "y": translate_y},
-                shear=0,
+                scale=(1.0, 1.0),
+                rotate=(0, 0),
+                translate_percent={"x": (translate_x, translate_x), "y": (translate_y, translate_y)},
+                shear=(0, 0),
                 p=1.0,
             ),
         ],
@@ -1613,10 +1613,10 @@ def test_obb_affine_pure_scaling(scale: float) -> None:
     transform = A.Compose(
         [
             A.Affine(
-                scale=scale,
-                rotate=0,
-                translate_px=0,
-                shear=0,
+                scale=(scale, scale),
+                rotate=(0, 0),
+                translate_px=(0, 0),
+                shear=(0, 0),
                 fit_output=False,
                 p=1.0,
             ),
@@ -1668,7 +1668,7 @@ def test_obb_affine_pure_scaling(scale: float) -> None:
     [30, 45, 90, 135, 180],
 )
 def test_obb_affine_rotation_vs_rotate_transform(rotation_deg: int) -> None:
-    """Test that Affine(rotate=X) produces same results as Rotate(limit=X).
+    """Test that Affine(rotate=X) produces same results as Rotate(angle_range=X).
 
     This validates that Affine rotation handling is consistent with Rotate transform.
     """
@@ -1689,7 +1689,7 @@ def test_obb_affine_rotation_vs_rotate_transform(rotation_deg: int) -> None:
     # Apply Affine with rotation
     affine_transform = A.Compose(
         [
-            A.Affine(rotate=rotation_deg, scale=1.0, translate_px=0, shear=0, p=1.0),
+            A.Affine(rotate=(rotation_deg, rotation_deg), scale=(1.0, 1.0), translate_px=(0, 0), shear=(0, 0), p=1.0),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -1704,7 +1704,7 @@ def test_obb_affine_rotation_vs_rotate_transform(rotation_deg: int) -> None:
     # Apply Rotate transform
     rotate_transform = A.Compose(
         [
-            A.Rotate(limit=(rotation_deg, rotation_deg), p=1.0),
+            A.Rotate(angle_range=(rotation_deg, rotation_deg), p=1.0),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -1722,7 +1722,7 @@ def test_obb_affine_rotation_vs_rotate_transform(rotation_deg: int) -> None:
         rotate_bbox[:4],
         rtol=1e-3,
         atol=1e-3,
-        err_msg=f"Affine(rotate={rotation_deg}) should match Rotate(limit={rotation_deg})",
+        err_msg=f"Affine(rotate={rotation_deg}) should match Rotate(angle_range={rotation_deg})",
     )
 
 
@@ -1757,7 +1757,13 @@ def test_obb_affine_combined_scale_rotate(scale: float, rotation_deg: int) -> No
 
     transform = A.Compose(
         [
-            A.Affine(scale=scale, rotate=rotation_deg, translate_px=0, shear=0, p=1.0),
+            A.Affine(
+                scale=(scale, scale),
+                rotate=(rotation_deg, rotation_deg),
+                translate_px=(0, 0),
+                shear=(0, 0),
+                p=1.0,
+            ),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -1820,7 +1826,7 @@ def test_obb_affine_different_image_sizes(image_size: int) -> None:
     # Apply 45° rotation
     transform = A.Compose(
         [
-            A.Affine(rotate=45, scale=1.0, translate_px=0, shear=0, p=1.0),
+            A.Affine(rotate=(45, 45), scale=(1.0, 1.0), translate_px=(0, 0), shear=(0, 0), p=1.0),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -1882,7 +1888,7 @@ def test_obb_affine_very_small_boxes(box_size: float, rotation_deg: int) -> None
 
     transform = A.Compose(
         [
-            A.Affine(rotate=rotation_deg, scale=1.0, translate_px=0, shear=0, p=1.0),
+            A.Affine(rotate=(rotation_deg, rotation_deg), scale=(1.0, 1.0), translate_px=(0, 0), shear=(0, 0), p=1.0),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -1946,10 +1952,10 @@ def test_obb_affine_shear_transforms(shear_x: float, shear_y: float) -> None:
     transform = A.Compose(
         [
             A.Affine(
-                scale=1.0,
-                rotate=0,
-                translate_px=0,
-                shear={"x": shear_x, "y": shear_y},
+                scale=(1.0, 1.0),
+                rotate=(0, 0),
+                translate_px=(0, 0),
+                shear={"x": (shear_x, shear_x), "y": (shear_y, shear_y)},
                 fit_output=False,
                 p=1.0,
             ),
@@ -2016,7 +2022,7 @@ def test_obb_affine_non_square_images(image_height: int, image_width: int) -> No
     # Apply 90° rotation
     transform = A.Compose(
         [
-            A.Affine(rotate=90, scale=1.0, translate_px=0, shear=0, p=1.0),
+            A.Affine(rotate=(90, 90), scale=(1.0, 1.0), translate_px=(0, 0), shear=(0, 0), p=1.0),
         ],
         bbox_params=A.BboxParams(
             coord_format="albumentations",
@@ -2076,10 +2082,10 @@ def test_obb_affine_fit_output(rotation_deg: int) -> None:
     transform = A.Compose(
         [
             A.Affine(
-                rotate=rotation_deg,
-                scale=1.0,
-                translate_px=0,
-                shear=0,
+                rotate=(rotation_deg, rotation_deg),
+                scale=(1.0, 1.0),
+                translate_px=(0, 0),
+                shear=(0, 0),
                 fit_output=True,
                 p=1.0,
             ),

@@ -7,7 +7,7 @@ dithering, halftone, and lens flare effects.
 
 import math
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal
 
 import cv2
 import numpy as np
@@ -27,10 +27,7 @@ from albumentations.augmentations.pixel import functional as fpixel
 from albumentations.augmentations.utils import non_rgb_error
 from albumentations.core.pydantic import (
     check_range_bounds,
-    convert_to_0plus_range,
-    convert_to_1plus_int_range,
     nondecreasing,
-    process_non_negative_range,
 )
 from albumentations.core.transforms_interface import (
     BaseTransformInitSchema,
@@ -237,20 +234,20 @@ class InvertImg(ImageOnlyTransform):
 
 
 class Sharpen(ImageOnlyTransform):
-    """Sharpen the image via kernel or Gaussian unsharp method. alpha and lightness control
-    strength. Enhances edges; useful for document or detail-sensitive tasks.
+    """Sharpen the image via a 3x3 kernel or a Gaussian unsharp mask, with strength
+    controlled by `alpha_range` and `lightness_range`.
 
     Implements two different approaches to image sharpening:
     1. Traditional kernel-based method using Laplacian operator
     2. Gaussian interpolation method (similar to Kornia's approach)
 
     Args:
-        alpha (tuple[float, float]): Range for the visibility of sharpening effect.
+        alpha_range (tuple[float, float]): Range for the visibility of sharpening effect.
             At 0, only the original image is visible, at 1.0 only its processed version is visible.
             Values should be in the range [0, 1].
             Used in both methods. Default: (0.2, 0.5).
 
-        lightness (tuple[float, float]): Range for the lightness of the sharpened image.
+        lightness_range (tuple[float, float]): Range for the lightness of the sharpened image.
             Only used in 'kernel' method. Larger values create higher contrast.
             Values should be greater than 0. Default: (0.5, 1.0).
 
@@ -318,15 +315,15 @@ class Sharpen(ImageOnlyTransform):
 
         # Traditional kernel sharpening
         >>> transform = A.Sharpen(
-        ...     alpha=(0.2, 0.5),
-        ...     lightness=(0.5, 1.0),
+        ...     alpha_range=(0.2, 0.5),
+        ...     lightness_range=(0.5, 1.0),
         ...     method='kernel',
         ...     p=1.0
         ... )
 
         # Gaussian interpolation sharpening
         >>> transform = A.Sharpen(
-        ...     alpha=(0.5, 1.0),
+        ...     alpha_range=(0.5, 1.0),
         ...     method='gaussian',
         ...     kernel_size=5,
         ...     sigma=1.0,
@@ -352,8 +349,8 @@ class Sharpen(ImageOnlyTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
-        alpha: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, 1))]
-        lightness: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, None))]
+        alpha_range: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, 1))]
+        lightness_range: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, None))]
         method: Literal["kernel", "gaussian"]
         kernel_size: int = Field(ge=3)
         sigma: float = Field(gt=0)
@@ -365,16 +362,16 @@ class Sharpen(ImageOnlyTransform):
 
     def __init__(
         self,
-        alpha: tuple[float, float] = (0.2, 0.5),
-        lightness: tuple[float, float] = (0.5, 1.0),
+        alpha_range: tuple[float, float] = (0.2, 0.5),
+        lightness_range: tuple[float, float] = (0.5, 1.0),
         method: Literal["kernel", "gaussian"] = "kernel",
         kernel_size: int = 5,
         sigma: float = 1.0,
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.alpha = alpha
-        self.lightness = lightness
+        self.alpha_range = alpha_range
+        self.lightness_range = lightness_range
         self.method = method
         self.kernel_size = kernel_size
         self.sigma = sigma
@@ -393,11 +390,11 @@ class Sharpen(ImageOnlyTransform):
         return (1 - alpha) * matrix_nochange + alpha * matrix_effect
 
     def get_params(self) -> dict[str, Any]:
-        alpha = self.py_random.uniform(*self.alpha)
+        alpha = self.py_random.uniform(*self.alpha_range)
 
         if self.method == "kernel":
-            lightness = self.py_random.uniform(*self.lightness)
-            self.applied_config = {"alpha": alpha, "lightness": lightness}
+            lightness = self.py_random.uniform(*self.lightness_range)
+            self.applied_config = {"alpha_range": alpha, "lightness_range": lightness}
             return {
                 "alpha": alpha,
                 "sharpening_matrix": self.__generate_sharpening_matrix(
@@ -406,7 +403,7 @@ class Sharpen(ImageOnlyTransform):
                 ),
             }
 
-        self.applied_config = {"alpha": alpha}
+        self.applied_config = {"alpha_range": alpha}
         return {"alpha": alpha, "sharpening_matrix": None}
 
     def apply(
@@ -433,13 +430,13 @@ class Emboss(ImageOnlyTransform):
     differences in adjacent pixel values.
 
     Args:
-        alpha (tuple[float, float]): Range to choose the visibility of the embossed image.
+        alpha_range (tuple[float, float]): Range to choose the visibility of the embossed image.
             At 0, only the original image is visible, at 1.0 only its embossed version is visible.
             Values should be in the range [0, 1].
             Alpha will be randomly selected from this range for each image.
             Default: (0.2, 0.5)
 
-        strength (tuple[float, float]): Range to choose the strength of the embossing effect.
+        strength_range (tuple[float, float]): Range to choose the strength of the embossing effect.
             Higher values create a more pronounced 3D effect.
             Values should be non-negative.
             Strength will be randomly selected from this range for each image.
@@ -467,7 +464,7 @@ class Emboss(ImageOnlyTransform):
         >>> import numpy as np
         >>> import albumentations as A
         >>> image = np.random.randint(0, 256, (100, 100, 3), dtype=np.uint8)
-        >>> transform = A.Emboss(alpha=(0.2, 0.5), strength=(0.2, 0.7), p=0.5)
+        >>> transform = A.Emboss(alpha_range=(0.2, 0.5), strength_range=(0.2, 0.7), p=0.5)
         >>> result = transform(image=image)
         >>> embossed_image = result['image']
 
@@ -478,18 +475,18 @@ class Emboss(ImageOnlyTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
-        alpha: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, 1))]
-        strength: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, None))]
+        alpha_range: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, 1))]
+        strength_range: Annotated[tuple[float, float], AfterValidator(check_range_bounds(0, None))]
 
     def __init__(
         self,
-        alpha: tuple[float, float] = (0.2, 0.5),
-        strength: tuple[float, float] = (0.2, 0.7),
+        alpha_range: tuple[float, float] = (0.2, 0.5),
+        strength_range: tuple[float, float] = (0.2, 0.7),
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.alpha = alpha
-        self.strength = strength
+        self.alpha_range = alpha_range
+        self.strength_range = strength_range
 
     @staticmethod
     def __generate_emboss_matrix(
@@ -508,13 +505,13 @@ class Emboss(ImageOnlyTransform):
         return (1 - alpha_sample) * matrix_nochange + alpha_sample * matrix_effect
 
     def get_params(self) -> dict[str, np.ndarray]:
-        alpha = self.py_random.uniform(*self.alpha)
-        strength = self.py_random.uniform(*self.strength)
+        alpha = self.py_random.uniform(*self.alpha_range)
+        strength = self.py_random.uniform(*self.strength_range)
         emboss_matrix = self.__generate_emboss_matrix(
             alpha_sample=alpha,
             strength_sample=strength,
         )
-        self.applied_config = {"alpha": alpha, "strength": strength}
+        self.applied_config = {"alpha_range": alpha, "strength_range": strength}
         return {"emboss_matrix": emboss_matrix}
 
     def apply(
@@ -639,12 +636,12 @@ class Enhance(ImageOnlyTransform):
 
 
 class Superpixels(ImageOnlyTransform):
-    """Replace image with superpixel segmentation (SLIC). p_replace, n_segments, max_size
-    control fraction and segment count. Reduces fine texture.
+    """Replace image with superpixel segmentation (SLIC). p_replace_range, n_segments_range,
+    max_size control fraction and segment count. Reduces fine texture.
 
     Args:
-        p_replace (tuple[float, float] | float): Defines for any segment the probability that the pixels within that
-            segment are replaced by their average color (otherwise, the pixels are not changed).
+        p_replace_range (tuple[float, float]): Defines for any segment the probability that the pixels within
+            that segment are replaced by their average color (otherwise, the pixels are not changed).
 
 
             * A probability of `0.0` would mean, that the pixels in no
@@ -662,7 +659,7 @@ class Superpixels(ImageOnlyTransform):
             sampled from the interval `[a, b]` per image.
             Default: (0.1, 0.3)
 
-        n_segments (tuple[int, int] | int): Rough target number of how many superpixels to generate.
+        n_segments_range (tuple[int, int]): Rough target number of how many superpixels to generate.
             The algorithm may deviate from this number.
             Lower value will lead to coarser superpixels.
             Higher values are computationally more intensive and will hence lead to a slowdown.
@@ -719,8 +716,8 @@ class Superpixels(ImageOnlyTransform):
 
         # Apply superpixels with custom parameters
         >>> transform = A.Superpixels(
-        ...     p_replace=(0.5, 0.7),
-        ...     n_segments=(50, 100),
+        ...     p_replace_range=(0.5, 0.7),
+        ...     n_segments_range=(50, 100),
         ...     max_size=None,
         ...     interpolation=cv2.INTER_NEAREST,
         ...     p=1.0
@@ -730,16 +727,14 @@ class Superpixels(ImageOnlyTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
-        p_replace: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(convert_to_0plus_range),
+        p_replace_range: Annotated[
+            tuple[float, float],
             AfterValidator(check_range_bounds(0, 1)),
             AfterValidator(nondecreasing),
         ]
-        n_segments: Annotated[
-            tuple[int, int] | int,
-            AfterValidator(convert_to_1plus_int_range),
-            AfterValidator(check_range_bounds(1, None)),
+        n_segments_range: Annotated[
+            tuple[int, int],
+            AfterValidator(check_range_bounds(1)),
         ]
         max_size: int | None = Field(ge=1)
         interpolation: Literal[
@@ -754,8 +749,8 @@ class Superpixels(ImageOnlyTransform):
 
     def __init__(
         self,
-        p_replace: tuple[float, float] | float = (0, 0.1),
-        n_segments: tuple[int, int] | int = (100, 100),
+        p_replace_range: tuple[float, float] = (0, 0.1),
+        n_segments_range: tuple[int, int] = (100, 100),
         max_size: int | None = 128,
         interpolation: Literal[
             cv2.INTER_NEAREST,
@@ -769,15 +764,15 @@ class Superpixels(ImageOnlyTransform):
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.p_replace = cast("tuple[float, float]", p_replace)
-        self.n_segments = cast("tuple[int, int]", n_segments)
+        self.p_replace_range = p_replace_range
+        self.n_segments_range = n_segments_range
         self.max_size = max_size
         self.interpolation = interpolation
 
     def get_params(self) -> dict[str, Any]:
-        n_segments = self.py_random.randint(*self.n_segments)
-        p = self.py_random.uniform(*self.p_replace)
-        self.applied_config = {"n_segments": n_segments, "p_replace": p}
+        n_segments = self.py_random.randint(*self.n_segments_range)
+        p = self.py_random.uniform(*self.p_replace_range)
+        self.applied_config = {"n_segments_range": n_segments, "p_replace_range": p}
         return {
             "replace_samples": self.random_generator.random(n_segments) < p,
             "n_segments": n_segments,
@@ -800,21 +795,18 @@ class Superpixels(ImageOnlyTransform):
 
 
 class RingingOvershoot(ImageOnlyTransform):
-    """Create ringing or overshoot artifacts via 2D sinc convolution. blur_limit and
-    cutoff control strength. Simulates sharpening or compression artifacts.
+    """Create ringing or overshoot artifacts via 2D sinc convolution. blur_range and
+    cutoff_range control strength. Simulates sharpening or compression artifacts.
 
     This transform simulates the ringing artifacts that can occur in digital image processing,
     particularly after sharpening or edge enhancement operations. It creates oscillations
     or overshoots near sharp transitions in the image.
 
     Args:
-        blur_limit (tuple[int, int] | int): Maximum kernel size for the sinc filter.
-            Must be an odd number in the range [3, inf).
-            If a single int is provided, the kernel size will be randomly chosen
-            from the range (3, blur_limit). If a tuple (min, max) is provided,
-            the kernel size will be randomly chosen from the range (min, max).
+        blur_range (tuple[int, int]): Inclusive range for the sinc filter kernel size.
+            Both ends must be odd and >= 3.
             Default: (7, 15).
-        cutoff (tuple[float, float]): Range to choose the cutoff frequency in radians.
+        cutoff_range (tuple[float, float]): Range to choose the cutoff frequency in radians.
             Values should be in the range (0, π). A lower cutoff frequency will
             result in more pronounced ringing effects.
             Default: (π/4, π/2).
@@ -834,7 +826,7 @@ class RingingOvershoot(ImageOnlyTransform):
           of sharp transitions, such as edges or object boundaries.
         - This transform uses a 2D sinc filter (also known as a 2D cardinal sine function)
           to introduce these artifacts.
-        - The severity of the ringing effect is controlled by both the kernel size (blur_limit)
+        - The severity of the ringing effect is controlled by both the kernel size (blur_range)
           and the cutoff frequency.
         - Larger kernel sizes and lower cutoff frequencies will generally produce more
           noticeable ringing effects.
@@ -870,8 +862,8 @@ class RingingOvershoot(ImageOnlyTransform):
 
         # Apply ringing effect with custom parameters
         >>> transform = A.RingingOvershoot(
-        ...     blur_limit=(9, 17),
-        ...     cutoff=(np.pi/6, np.pi/3),
+        ...     blur_range=(9, 17),
+        ...     cutoff_range=(np.pi/6, np.pi/3),
         ...     p=1.0
         ... )
         >>> ringing_image = transform(image=image)['image']
@@ -884,8 +876,8 @@ class RingingOvershoot(ImageOnlyTransform):
     """
 
     class InitSchema(BlurInitSchema):
-        blur_limit: tuple[int, int] | int
-        cutoff: Annotated[
+        blur_range: tuple[int, int]
+        cutoff_range: Annotated[
             tuple[float, float],
             AfterValidator(check_range_bounds(0, np.pi)),
             AfterValidator(nondecreasing),
@@ -893,20 +885,20 @@ class RingingOvershoot(ImageOnlyTransform):
 
     def __init__(
         self,
-        blur_limit: tuple[int, int] | int = (7, 15),
-        cutoff: tuple[float, float] = (np.pi / 4, np.pi / 2),
+        blur_range: tuple[int, int] = (7, 15),
+        cutoff_range: tuple[float, float] = (np.pi / 4, np.pi / 2),
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.blur_limit = cast("tuple[int, int]", blur_limit)
-        self.cutoff = cutoff
+        self.blur_range = blur_range
+        self.cutoff_range = cutoff_range
 
     def get_params(self) -> dict[str, np.ndarray]:
-        ksize = self.py_random.randrange(self.blur_limit[0], self.blur_limit[1] + 1, 2)
+        ksize = self.py_random.randrange(self.blur_range[0], self.blur_range[1] + 1, 2)
         if ksize % 2 == 0:
             ksize += 1
 
-        cutoff = self.py_random.uniform(*self.cutoff)
+        cutoff = self.py_random.uniform(*self.cutoff_range)
 
         # From dsp.stackexchange.com/questions/58301/2-d-circularly-symmetric-low-pass-filter
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -925,7 +917,7 @@ class RingingOvershoot(ImageOnlyTransform):
         # Normalize kernel
         kernel = kernel.astype(np.float32) / reduce_sum(kernel)
 
-        self.applied_config = {"blur_limit": ksize, "cutoff": cutoff}
+        self.applied_config = {"blur_range": ksize, "cutoff_range": cutoff}
         return {"kernel": kernel}
 
     def apply(self, img: ImageType, kernel: np.ndarray, **params: Any) -> ImageType:
@@ -933,7 +925,7 @@ class RingingOvershoot(ImageOnlyTransform):
 
 
 class UnsharpMask(ImageOnlyTransform):
-    """Sharpen via unsharp masking: blur, subtract, add back. blur_limit, sigma_limit, alpha
+    """Sharpen via unsharp masking: blur, subtract, add back. blur_range, sigma_range, alpha_range
     control strength. Luminance unchanged; edges enhanced.
 
     Unsharp masking is a technique that enhances edge contrast in an image, creating the illusion of increased
@@ -942,15 +934,15 @@ class UnsharpMask(ImageOnlyTransform):
     which is combined with the original image to enhance edges and fine details.
 
     Args:
-        blur_limit (tuple[int, int] | int): maximum Gaussian kernel size for blurring the input image.
+        blur_range (tuple[int, int]): maximum Gaussian kernel size for blurring the input image.
             Must be zero or odd and in range [0, inf). If set to 0 it will be computed from sigma
             as `round(sigma * (3 if img.dtype == np.uint8 else 4) * 2 + 1) + 1`.
-            If set single value `blur_limit` will be in range (0, blur_limit).
+            If set single value `blur_range` will be in range (0, blur_range).
             Default: (3, 7).
-        sigma_limit (tuple[float, float] | float): Gaussian kernel standard deviation. Must be more or equal to 0.
-            If set single value `sigma_limit` will be in range (0, sigma_limit).
+        sigma_range (tuple[float, float]): Gaussian kernel standard deviation. Must be more or equal to 0.
+            If set single value `sigma_range` will be in range (0, sigma_range).
             If set to 0 sigma will be computed as `sigma = 0.3*((ksize-1)*0.5 - 1) + 0.8`. Default: 0.
-        alpha (tuple[float, float]): range to choose the visibility of the sharpened image.
+        alpha_range (tuple[float, float]): range to choose the visibility of the sharpened image.
             At 0, only the original image is visible, at 1.0 only its sharpened version is visible.
             Default: (0.2, 0.5).
         threshold (int): Value to limit sharpening only for areas with high pixel difference between original image
@@ -968,9 +960,9 @@ class UnsharpMask(ImageOnlyTransform):
         - The algorithm creates a mask M = (I - G) * alpha, where I is the original image and G is the Gaussian
             blurred version.
         - The final image is computed as: output = I + M if |I - G| > threshold, else I.
-        - Higher alpha values increase the strength of the sharpening effect.
+        - Higher alpha_range values increase the strength of the sharpening effect.
         - Higher threshold values limit the sharpening effect to areas with more significant edges or details.
-        - The blur_limit and sigma_limit parameters control the Gaussian blur used to create the mask.
+        - The blur_range and sigma_range parameters control the Gaussian blur used to create the mask.
 
     References:
         Unsharp Masking: https://en.wikipedia.org/wiki/Unsharp_masking
@@ -986,9 +978,9 @@ class UnsharpMask(ImageOnlyTransform):
         >>>
         # Apply UnsharpMask with custom parameters
         >>> transform = A.UnsharpMask(
-        ...     blur_limit=(3, 7),
-        ...     sigma_limit=(0.1, 0.5),
-        ...     alpha=(0.2, 0.7),
+        ...     blur_range=(3, 7),
+        ...     sigma_range=(0.1, 0.5),
+        ...     alpha_range=(0.2, 0.7),
         ...     threshold=15,
         ...     p=1.0
         ... )
@@ -997,41 +989,40 @@ class UnsharpMask(ImageOnlyTransform):
     """
 
     class InitSchema(BaseTransformInitSchema):
-        sigma_limit: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(process_non_negative_range),
+        sigma_range: Annotated[
+            tuple[float, float],
+            AfterValidator(check_range_bounds(0)),
             AfterValidator(nondecreasing),
         ]
-        alpha: Annotated[
-            tuple[float, float] | float,
-            AfterValidator(convert_to_0plus_range),
+        alpha_range: Annotated[
+            tuple[float, float],
             AfterValidator(check_range_bounds(0, 1)),
             AfterValidator(nondecreasing),
         ]
         threshold: int = Field(ge=0, le=255)
-        blur_limit: tuple[int, int] | int
+        blur_range: tuple[int, int]
 
-        @field_validator("blur_limit")
+        @field_validator("blur_range")
         @classmethod
         def _process_blur(
             cls,
-            value: tuple[int, int] | int,
+            value: tuple[int, int],
             info: ValidationInfo,
         ) -> tuple[int, int]:
-            return fblur.process_blur_limit(value, info, min_value=3)
+            return fblur.process_blur_range(value, info, min_value=3)
 
     def __init__(
         self,
-        blur_limit: tuple[int, int] | int = (3, 7),
-        sigma_limit: tuple[float, float] | float = 0.0,
-        alpha: tuple[float, float] | float = (0.2, 0.5),
+        blur_range: tuple[int, int] = (3, 7),
+        sigma_range: tuple[float, float] = (0.0, 0.0),
+        alpha_range: tuple[float, float] = (0.2, 0.5),
         threshold: int = 10,
         p: float = 0.5,
     ):
         super().__init__(p=p)
-        self.blur_limit = cast("tuple[int, int]", blur_limit)
-        self.sigma_limit = cast("tuple[float, float]", sigma_limit)
-        self.alpha = cast("tuple[float, float]", alpha)
+        self.blur_range = blur_range
+        self.sigma_range = sigma_range
+        self.alpha_range = alpha_range
         self.threshold = threshold
 
     def get_params_dependent_on_data(
@@ -1039,10 +1030,10 @@ class UnsharpMask(ImageOnlyTransform):
         params: dict[str, Any],
         data: dict[str, Any],
     ) -> dict[str, Any]:
-        ksize = self.py_random.randrange(self.blur_limit[0], self.blur_limit[1] + 1, 2)
-        sigma = self.py_random.uniform(*self.sigma_limit)
-        alpha = self.py_random.uniform(*self.alpha)
-        self.applied_config = {"blur_limit": ksize, "sigma_limit": sigma, "alpha": alpha}
+        ksize = self.py_random.randrange(self.blur_range[0], self.blur_range[1] + 1, 2)
+        sigma = self.py_random.uniform(*self.sigma_range)
+        alpha = self.py_random.uniform(*self.alpha_range)
+        self.applied_config = {"blur_range": ksize, "sigma_range": sigma, "alpha_range": alpha}
         return {"ksize": ksize, "sigma": sigma, "alpha": alpha}
 
     def apply(

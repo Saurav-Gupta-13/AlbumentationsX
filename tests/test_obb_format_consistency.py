@@ -25,7 +25,7 @@ import albumentations as A
     [
         pytest.param(A.HorizontalFlip(p=1.0), id="HFlip"),
         pytest.param(A.VerticalFlip(p=1.0), id="VFlip"),
-        pytest.param(A.Rotate(limit=(45, 45), p=1.0), id="Rotate"),
+        pytest.param(A.Rotate(angle_range=(45, 45), p=1.0), id="Rotate"),
         pytest.param(A.RandomRotate90(p=1.0), id="Rotate90"),
     ],
 )
@@ -178,7 +178,7 @@ def test_obb_format_preserved_through_pipeline(bbox_format: str, input_bbox: lis
         [
             A.HorizontalFlip(p=1.0),
             A.VerticalFlip(p=1.0),
-            A.Rotate(limit=(30, 30), p=1.0),
+            A.Rotate(angle_range=(30, 30), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format=bbox_format, bbox_type="obb"),
     )
@@ -352,8 +352,8 @@ def test_obb_affine_filters_out_of_bounds_boxes() -> None:
     transform = A.Compose(
         [
             A.Affine(
-                rotate=90,
-                translate_percent={"x": 0.5, "y": 0.5},  # Large shift to push bbox out
+                rotate=(90, 90),
+                translate_percent={"x": (0.5, 0.5), "y": (0.5, 0.5)},  # Large shift to push bbox out
                 p=1.0,
             ),
         ],
@@ -378,7 +378,7 @@ def test_obb_affine_preserves_in_bounds_boxes() -> None:
 
     transform = A.Compose(
         [
-            A.Affine(rotate=45, p=1.0),
+            A.Affine(rotate=(45, 45), p=1.0),
         ],
         bbox_params=A.BboxParams(coord_format="albumentations", bbox_type="obb"),
     )

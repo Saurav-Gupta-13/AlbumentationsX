@@ -12,12 +12,14 @@ from ._functional_noise import (
 from ._functional_shared import (
     MAX_VALUES_BY_DTYPE,
     MONO_CHANNEL_DIMENSIONS,
+    MULTICHANNEL_LUT_MEDIUM_IMAGE_PIXELS,
     NUM_MULTI_CHANNEL_DIMENSIONS,
     ImageType,
     ImageUInt8,
     add,
     add_array,
     add_weighted,
+    apply_multichannel_lut,
     clip,
     clipped,
     cv2,
@@ -197,15 +199,23 @@ def create_directional_gradient(height: int, width: int, angle: float) -> np.nda
     """
     # Fast path for horizontal gradients
     if angle == 0:
-        return np.linspace(0, 1, width, dtype=np.float32)[None, :] * np.ones((height, 1), dtype=np.float32)
+        gradient = np.empty((height, width), dtype=np.float32)
+        gradient[:] = np.linspace(0, 1, width, dtype=np.float32)
+        return gradient
     if angle == 180:
-        return np.linspace(1, 0, width, dtype=np.float32)[None, :] * np.ones((height, 1), dtype=np.float32)
+        gradient = np.empty((height, width), dtype=np.float32)
+        gradient[:] = np.linspace(1, 0, width, dtype=np.float32)
+        return gradient
 
     # Fast path for vertical gradients
     if angle == 90:
-        return np.linspace(0, 1, height, dtype=np.float32)[:, None] * np.ones((1, width), dtype=np.float32)
+        gradient = np.empty((height, width), dtype=np.float32)
+        gradient[:] = np.linspace(0, 1, height, dtype=np.float32)[:, np.newaxis]
+        return gradient
     if angle == 270:
-        return np.linspace(1, 0, height, dtype=np.float32)[:, None] * np.ones((1, width), dtype=np.float32)
+        gradient = np.empty((height, width), dtype=np.float32)
+        gradient[:] = np.linspace(1, 0, height, dtype=np.float32)[:, np.newaxis]
+        return gradient
 
     # Fast path for diagonal gradients using broadcasting
     if angle in (45, 135, 225, 315):
@@ -344,6 +354,12 @@ def apply_linear_illumination(img: ImageType, intensity: float, angle: float) ->
 
     # Add channel dimension if needed
     if img.ndim == NUM_MULTI_CHANNEL_DIMENSIONS:
+        num_channels = img.shape[2]
+        if num_channels > 1:
+            gradient = cv2.merge([gradient] * num_channels)
+            result = cv2.add(img, gradient)
+            np.clip(result, 0, 1, out=result)
+            return result
         gradient = gradient[..., np.newaxis]
 
     result = img + gradient
@@ -447,14 +463,108 @@ def _auto_contrast_single_channel(
 ) -> ImageUInt8:
     mask = None if ignore is None else (img != ignore)
     hist = cv2.calcHist([img], [0], mask, [256], [0, max_value]).ravel()
+    lut = _create_auto_contrast_lut(hist, cutoff, ignore, method, max_value)
+    if lut is None:
+        return img.copy()
+
+    return sz_lut(img, lut, inplace=False)
+
+
+def _auto_contrast_pil_zero_cutoff(img: ImageUInt8, max_value: int) -> ImageUInt8:
+    """Apply Pillow-style autocontrast for single-channel images without building a
+    full histogram when no cutoff or ignored value is requested.
+    """
+    channel = img if img.ndim == MONO_CHANNEL_DIMENSIONS else img[..., 0]
+    min_intensity = int(np.min(channel))
+    max_intensity = int(np.max(channel))
+    if min_intensity >= max_intensity:
+        return img.copy()
+    lut = create_contrast_lut(np.empty(0), min_intensity, max_intensity, max_value, "pil")
+    result = sz_lut(channel, lut, inplace=False)
+    return result if img.ndim == MONO_CHANNEL_DIMENSIONS else result[..., np.newaxis]
+
+
+def _auto_contrast_multichannel_lut(
+    img: ImageUInt8,
+    cutoff: float,
+    method: Literal["cdf", "pil"],
+    max_value: int,
+) -> ImageUInt8:
+    """Apply per-channel autocontrast LUTs with one OpenCV pass for large RGB
+    images and multispectral inputs where split channel assignment is slower.
+    """
+    luts = []
+    for channel_idx in range(get_num_channels(img)):
+        channel = img[..., channel_idx]
+        hist = cv2.calcHist([channel], [0], None, [256], [0, max_value]).ravel()
+        lut = _create_auto_contrast_lut(hist, cutoff, None, method, max_value)
+        luts.append(np.arange(256, dtype=np.uint8) if lut is None else lut)
+
+    return apply_multichannel_lut(img, np.stack(luts), get_num_channels(img))
+
+
+def _auto_contrast_multichannel_hist(
+    img: ImageUInt8,
+    cutoff: float,
+    ignore: int | None,
+    method: Literal["cdf", "pil"],
+    max_value: int,
+) -> ImageUInt8:
+    result = img.copy()
+    channels = cv2.split(img)
+    hists: list[np.ndarray | None] = []
+    for channel_idx, channel in enumerate(channels):
+        if ignore is not None and channel_idx == ignore:
+            hists.append(None)
+            continue
+        mask = None if ignore is None else (channel != ignore)
+        hist = cv2.calcHist([channel], [0], mask, [256], [0, max_value])
+        hists.append(hist.ravel())
+
+    for channel_idx, channel in enumerate(channels):
+        if ignore is not None and channel_idx == ignore:
+            continue
+
+        hist = hists[channel_idx]
+        if hist is None:
+            continue
+
+        lut = _create_auto_contrast_lut(hist, cutoff, ignore, method, max_value)
+        if lut is None:
+            continue
+        result[..., channel_idx] = sz_lut(channel, lut)
+
+    return result
+
+
+def _create_auto_contrast_lut(
+    hist: np.ndarray,
+    cutoff: float,
+    ignore: int | None,
+    method: Literal["cdf", "pil"],
+    max_value: int,
+) -> np.ndarray | None:
     lo, hi = get_histogram_bounds(hist, cutoff)
     if hi <= lo:
-        return img.copy()
+        return None
 
     lut = create_contrast_lut(hist, lo, hi, max_value, method)
     if ignore is not None:
         lut[ignore] = ignore
-    return sz_lut(img, lut, inplace=False)
+    return lut
+
+
+def _should_use_auto_contrast_multichannel_lut(
+    img: ImageUInt8,
+    ignore: int | None,
+    method: Literal["cdf", "pil"],
+    num_channels: int,
+) -> bool:
+    return (
+        method == "cdf"
+        and ignore is None
+        and (num_channels > 3 or img.shape[0] * img.shape[1] >= MULTICHANNEL_LUT_MEDIUM_IMAGE_PIXELS)
+    )
 
 
 @uint8_io
@@ -477,44 +587,19 @@ def auto_contrast(
         ImageType: Image with enhanced contrast
 
     """
-    result = img.copy()
     num_channels = get_num_channels(img)
     max_value = MAX_VALUES_BY_DTYPE[img.dtype]
+
+    if method == "pil" and cutoff == 0 and ignore is None and num_channels == 1:
+        return _auto_contrast_pil_zero_cutoff(img, max_value)
 
     if img.ndim == MONO_CHANNEL_DIMENSIONS:
         return _auto_contrast_single_channel(img, cutoff, ignore, method, max_value)
 
-    channels = cv2.split(img)
-    hists: list[np.ndarray | None] = []
-    for channel_idx, channel in enumerate(channels):
-        if ignore is not None and channel_idx == ignore:
-            hists.append(None)
-            continue
-        mask = None if ignore is None else (channel != ignore)
-        hist = cv2.calcHist([channel], [0], mask, [256], [0, max_value])
-        hists.append(hist.ravel())
+    if _should_use_auto_contrast_multichannel_lut(img, ignore, method, num_channels):
+        return _auto_contrast_multichannel_lut(img, cutoff, method, max_value)
 
-    for channel_idx in range(num_channels):
-        if ignore is not None and channel_idx == ignore:
-            continue
-
-        hist = hists[channel_idx]
-        if hist is None:
-            continue
-
-        channel = channels[channel_idx]
-
-        lo, hi = get_histogram_bounds(hist, cutoff)
-        if hi <= lo:
-            continue
-
-        lut = create_contrast_lut(hist, lo, hi, max_value, method)
-        if ignore is not None:
-            lut[ignore] = ignore
-
-        result[..., channel_idx] = sz_lut(channel, lut)
-
-    return result
+    return _auto_contrast_multichannel_hist(img, cutoff, ignore, method, max_value)
 
 
 def create_contrast_lut(

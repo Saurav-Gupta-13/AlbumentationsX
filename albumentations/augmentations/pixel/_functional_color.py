@@ -7,12 +7,14 @@ from typing import Any, Literal
 
 from ._functional_shared import (
     MAX_VALUES_BY_DTYPE,
+    MULTICHANNEL_LUT_LARGE_IMAGE_PIXELS,
     NUM_MULTI_CHANNEL_DIMENSIONS,
     NUM_RGB_CHANNELS,
     PCA,
     ImageType,
     add_array,
     add_constant,
+    apply_multichannel_lut,
     clip,
     clipped,
     cv2,
@@ -228,25 +230,41 @@ def _equalize_cv(img: ImageType, mask: np.ndarray | None = None) -> ImageType:
         return cv2.equalizeHist(img)
 
     histogram = cv2.calcHist([img], [0], mask, [256], (0, 256)).ravel()
-
-    # Find the first non-zero index with a numpy operation
-    i = np.flatnonzero(histogram)[0] if np.any(histogram) else 255
-
-    total = reduce_sum(histogram)
-
-    # Safe division for equalize: handle edge case of uniform histograms
-    # If histogram is uniform (denominator == 0), return image unchanged
-    denominator = total - histogram[i]
-    if denominator == 0:
-        # Uniform histogram - no equalization needed
+    lut = _create_equalize_cv_lut(histogram)
+    if lut is None:
         return img
 
-    scale = 255.0 / denominator
-    # Optimize cumulative sum and scale to generate LUT
-    cumsum_histogram = np.cumsum(histogram)
-    lut = np.clip(((cumsum_histogram - cumsum_histogram[i]) * scale).round(), 0, 255).astype(np.uint8)
-
     return sz_lut(img, lut, inplace=True)
+
+
+def _create_equalize_cv_lut(histogram: np.ndarray) -> np.ndarray | None:
+    nonzero = np.flatnonzero(histogram)
+    if len(nonzero) == 0:
+        return np.arange(256, dtype=np.uint8)
+
+    first_nonzero = nonzero[0]
+    total = reduce_sum(histogram)
+    denominator = total - histogram[first_nonzero]
+    if denominator == 0:
+        return None
+
+    scale = 255.0 / denominator
+    cumsum_histogram = np.cumsum(histogram)
+    return np.clip(((cumsum_histogram - cumsum_histogram[first_nonzero]) * scale).round(), 0, 255).astype(np.uint8)
+
+
+def _equalize_cv_multichannel_lut(img: ImageType) -> ImageType:
+    """Apply OpenCV-style equalization with one multichannel LUT pass for large
+    RGB images and multispectral inputs where per-channel assignment is slower.
+    """
+    luts = []
+    for channel_idx in range(get_num_channels(img)):
+        channel = img[..., channel_idx]
+        histogram = cv2.calcHist([channel], [0], None, [256], (0, 256)).ravel()
+        lut = _create_equalize_cv_lut(histogram)
+        luts.append(np.arange(256, dtype=np.uint8) if lut is None else lut)
+
+    return apply_multichannel_lut(img, np.stack(luts), get_num_channels(img))
 
 
 def _check_preconditions(
@@ -335,8 +353,13 @@ def equalize(
         return function(img, _handle_mask(mask))
 
     if mask is None and by_channels and mode == "cv" and is_rgb_image(img):
+        if img.shape[0] * img.shape[1] >= MULTICHANNEL_LUT_LARGE_IMAGE_PIXELS:
+            return _equalize_cv_multichannel_lut(img)
         channels = cv2.split(img)
         return cv2.merge([cv2.equalizeHist(channel) for channel in channels])
+
+    if mask is None and by_channels and mode == "cv" and get_num_channels(img) > NUM_RGB_CHANNELS:
+        return _equalize_cv_multichannel_lut(img)
 
     if not by_channels:
         result_img = cv2.cvtColor(img, cv2.COLOR_RGB2YCrCb)
@@ -344,7 +367,7 @@ def equalize(
         return cv2.cvtColor(result_img, cv2.COLOR_YCrCb2RGB)
 
     result_img = np.empty_like(img)
-    for i in range(NUM_RGB_CHANNELS):
+    for i in range(get_num_channels(img)):
         _mask = _handle_mask(mask, i)
         # Extract channel, process, and ensure we maintain 2D shape
         channel_result = function(img[..., i], _mask)
@@ -410,10 +433,7 @@ def move_tone_curve(
             np.uint8,
             inplace=False,
         )
-        result = np.empty_like(img)
-        for i in range(num_channels):
-            result[..., i] = sz_lut(img[..., i], np.ascontiguousarray(luts[i]), inplace=False)
-        return result
+        return apply_multichannel_lut(img, luts, num_channels)
 
     raise TypeError(
         f"low_y and high_y must both be of type float or np.ndarray. Got {type(low_y)} and {type(high_y)}",

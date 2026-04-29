@@ -235,6 +235,50 @@ def create_directional_gradient(height: int, width: int, angle: float) -> np.nda
     return x + y
 
 
+def create_corner_illumination_gradient(
+    height: int,
+    width: int,
+    intensity: float,
+    corner: Literal[0, 1, 2, 3],
+) -> np.ndarray:
+    """Create float32 (H, W) corner illumination map for multiply_by_array
+    using Euclidean distance from a selected corner with diagonal scaling.
+
+    The map follows `1 + scale * distance`, where `distance` is the Euclidean distance from each pixel
+    to the selected image corner and `scale` combines `intensity` with a diagonal-based normalization
+    (numerically aligned with the previous `cv2.distanceTransform` implementation).
+
+    Args:
+        height (int): Output height `H`.
+        width (int): Output width `W`.
+        intensity (float): Signed strength. `0` returns an all-ones map (no effect). Positive values
+            increase multipliers with distance from the selected corner (typical vignette-style corner
+            darkening when applied via `multiply_by_array`). Negative values invert the radial scaling
+            (relative brightening toward the corner vs. the image edges), matching the prior corner
+            illumination behavior.
+        corner (Literal[0, 1, 2, 3]): Corner that anchors the distance field: `0` top-left, `1`
+            top-right, `2` bottom-right, `3` bottom-left.
+
+    Returns:
+        np.ndarray: Float32 array with shape `(height, width)`.
+
+    """
+    if intensity == 0:
+        return np.ones((height, width), dtype=np.float32)
+
+    corners = [(0, 0), (0, width - 1), (height - 1, width - 1), (height - 1, 0)]
+    corner_y, corner_x = corners[corner]
+
+    y = np.arange(height, dtype=np.float32)[:, np.newaxis] - corner_y
+    x = np.arange(width, dtype=np.float32)[np.newaxis, :] - corner_x
+
+    pattern = x * x + y * y
+    cv2.sqrt(pattern, dst=pattern)
+    cv2.multiply(pattern, -intensity / math.sqrt(height * height + width * width), dst=pattern)
+    cv2.add(pattern, 1, dst=pattern)
+    return pattern
+
+
 def create_illumination_gradient(
     height: int,
     width: int,
@@ -255,22 +299,7 @@ def create_illumination_gradient(
         return gradient
 
     if mode == "corner":
-        if intensity == 0:
-            return np.ones((height, width), dtype=np.float32)
-        corner = params["corner"]
-        diagonal_length = math.sqrt(height * height + width * width)
-        mask = np.full((height, width), 255, dtype=np.uint8)
-        corners = [(0, 0), (0, width - 1), (height - 1, width - 1), (height - 1, 0)]
-        mask[corners[corner]] = 0
-        pattern = cv2.distanceTransform(
-            mask,
-            distanceType=cv2.DIST_L2,
-            maskSize=cv2.DIST_MASK_PRECISE,
-            dstType=cv2.CV_32F,
-        )
-        cv2.multiply(pattern, -intensity / diagonal_length, dst=pattern)
-        cv2.add(pattern, 1, dst=pattern)
-        return pattern
+        return create_corner_illumination_gradient(height, width, intensity, params["corner"])
 
     # gaussian
     if intensity == 0:
@@ -345,28 +374,7 @@ def apply_corner_illumination(
 
     height, width = img.shape[:2]
 
-    # Pre-compute diagonal length once
-    diagonal_length = math.sqrt(height * height + width * width)
-
-    # Create inverted distance map mask directly
-    # Use uint8 for distanceTransform regardless of input dtype
-    mask = np.full((height, width), 255, dtype=np.uint8)
-
-    # Use array indexing instead of conditionals
-    corners = [(0, 0), (0, width - 1), (height - 1, width - 1), (height - 1, 0)]
-    mask[corners[corner]] = 0
-
-    # Calculate distance transform
-    pattern = cv2.distanceTransform(
-        mask,
-        distanceType=cv2.DIST_L2,
-        maskSize=cv2.DIST_MASK_PRECISE,
-        dstType=cv2.CV_32F,  # Specify float output directly
-    )
-
-    # Combine operations to reduce array copies
-    cv2.multiply(pattern, -intensity / diagonal_length, dst=pattern)
-    cv2.add(pattern, 1, dst=pattern)
+    pattern = create_corner_illumination_gradient(height, width, intensity, corner)
 
     if img.ndim == NUM_MULTI_CHANNEL_DIMENSIONS:
         num_channels = img.shape[2]
@@ -1078,6 +1086,7 @@ __all__ = [
     "apply_vignette",
     "auto_contrast",
     "create_contrast_lut",
+    "create_corner_illumination_gradient",
     "create_directional_gradient",
     "create_illumination_gradient",
     "generate_plasma_pattern",

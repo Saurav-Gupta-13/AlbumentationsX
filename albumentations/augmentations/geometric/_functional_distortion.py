@@ -74,6 +74,56 @@ def generate_inverse_distortion_map(
     return inv_map_x, inv_map_y
 
 
+def upscale_distortion_maps(
+    map_x: np.ndarray,
+    map_y: np.ndarray,
+    target_shape: tuple[int, int],
+    interpolation: int = cv2.INTER_LINEAR,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Upscale coarse distortion coordinate maps to full image size and rescale coordinates,
+    enabling faster map generation while preserving full-resolution remapping.
+
+    Distortion transforms can generate coordinate maps at reduced resolution, then upscale
+    them before remapping full-resolution targets to trade geometric precision for speed.
+
+    Args:
+        map_x (np.ndarray): X-coordinate map generated at the lower resolution.
+        map_y (np.ndarray): Y-coordinate map generated at the lower resolution.
+        target_shape (tuple[int, int]): Target image shape as `(height, width)`.
+        interpolation (int): OpenCV interpolation flag used for resizing the maps.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: Upscaled `map_x` and `map_y` with coordinates
+            adjusted for the target shape.
+
+    """
+    height, width = target_shape
+    map_height, map_width = map_x.shape[:2]
+
+    if (map_height, map_width) == (height, width):
+        return map_x, map_y
+
+    y_coords, x_coords = np.meshgrid(
+        np.arange(map_height, dtype=np.float32),
+        np.arange(map_width, dtype=np.float32),
+        indexing="ij",
+    )
+    dx = map_x - x_coords
+    dy = map_y - y_coords
+
+    scale_y = 1 if height == 1 or map_height == 1 else (map_height - 1) / (height - 1)
+    scale_x = 1 if width == 1 or map_width == 1 else (map_width - 1) / (width - 1)
+    dx = cv2.resize(dx, (width, height), interpolation=interpolation) / scale_x
+    dy = cv2.resize(dy, (width, height), interpolation=interpolation) / scale_y
+
+    y_coords, x_coords = np.meshgrid(
+        np.arange(height, dtype=np.float32),
+        np.arange(width, dtype=np.float32),
+        indexing="ij",
+    )
+    return x_coords + dx, y_coords + dy
+
+
 def generate_displacement_fields(
     image_shape: tuple[int, int],
     alpha: float,
@@ -562,4 +612,5 @@ __all__ = [
     "get_camera_matrix_distortion_maps",
     "get_fisheye_distortion_maps",
     "tps_transform",
+    "upscale_distortion_maps",
 ]

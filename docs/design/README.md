@@ -51,8 +51,7 @@ When creating a new design document:
 
 3. Add a reference to the new document in:
    - This README
-   - `CLAUDE.md` (under Design Documents section)
-   - `.cursor/rules/albumentations-rules.mdc` (if relevant for AI assistants)
+   - `.codex/rules/albumentations-rules.md` (if relevant for Codex-facing guidance)
 
 4. Keep documents up-to-date as implementation evolves
 
@@ -61,4 +60,4 @@ When creating a new design document:
 - [Coding Guidelines](../contributing/coding_guidelines.md) - Code standards and best practices
 - [Environment Setup](../contributing/environment_setup.md) - Development environment
 - [Contributing Guide](../../CONTRIBUTING.md) - Contribution process
-- [CLAUDE.md](../../CLAUDE.md) - AI code review guidelines
+- [AGENTS.md](../../AGENTS.md) - Codex guidelines

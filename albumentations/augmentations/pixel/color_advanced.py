@@ -1,20 +1,21 @@
 """Advanced color jitter, channel shift, aberration, stain, and photometric transforms."""
 
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Literal, TypedDict, cast
 
 from typing_extensions import Self
 
 from ._color_shared import (
+    CV2_INTER_LINEAR,
     AdditiveNoise,
     AfterValidator,
     BaseTransformInitSchema,
     Field,
+    FullInterpolationType,
     ImageOnlyTransform,
     ImageType,
     VolumeType,
     batch_transform,
     check_range_bounds,
-    cv2,
     fpixel,
     is_grayscale_image,
     is_rgb_image,
@@ -25,6 +26,14 @@ from ._color_shared import (
 )
 
 ColorRange = tuple[tuple[int, int, int], tuple[int, int, int]]
+
+
+class PlanckianJitterConst(TypedDict):
+    MAX_TEMP: int
+    MIN_BLACKBODY_TEMP: int
+    MIN_CIED_TEMP: int
+    WHITE_TEMP: int
+    SAMPLING_TEMP_PROB: float
 
 
 class ColorJitter(ImageOnlyTransform):
@@ -271,30 +280,14 @@ class ChromaticAberration(ImageOnlyTransform):
         primary_distortion_range: tuple[float, float]
         secondary_distortion_range: tuple[float, float]
         mode: Literal["green_purple", "red_blue", "random"]
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
+        interpolation: FullInterpolationType
 
     def __init__(
         self,
         primary_distortion_range: tuple[float, float] = (-0.02, 0.02),
         secondary_distortion_range: tuple[float, float] = (-0.05, 0.05),
         mode: Literal["green_purple", "red_blue", "random"] = "green_purple",
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_LINEAR,
+        interpolation: FullInterpolationType = CV2_INTER_LINEAR,
         p: float = 0.5,
     ):
         super().__init__(p=p)
@@ -388,7 +381,7 @@ class ChromaticAberration(ImageOnlyTransform):
         return b
 
 
-PLANKIAN_JITTER_CONST = {
+PLANKIAN_JITTER_CONST: PlanckianJitterConst = {
     "MAX_TEMP": max(
         *fpixel.PLANCKIAN_COEFFS["blackbody"].keys(),
         *fpixel.PLANCKIAN_COEFFS["cied"].keys(),
@@ -495,17 +488,17 @@ class PlanckianJitter(ImageOnlyTransform):
 
         @model_validator(mode="after")
         def _validate_temperature(self) -> Self:
-            max_temp = int(PLANKIAN_JITTER_CONST["MAX_TEMP"])
+            max_temp = PLANKIAN_JITTER_CONST["MAX_TEMP"]
 
             if self.temperature_range is None:
                 if self.mode == "blackbody":
                     self.temperature_range = (
-                        int(PLANKIAN_JITTER_CONST["MIN_BLACKBODY_TEMP"]),
+                        PLANKIAN_JITTER_CONST["MIN_BLACKBODY_TEMP"],
                         max_temp,
                     )
                 elif self.mode == "cied":
                     self.temperature_range = (
-                        int(PLANKIAN_JITTER_CONST["MIN_CIED_TEMP"]),
+                        PLANKIAN_JITTER_CONST["MIN_CIED_TEMP"],
                         max_temp,
                     )
             else:
@@ -947,7 +940,10 @@ class HEStain(ImageOnlyTransform):
             return fpixel.STAIN_MATRICES[random_preset]
         # vahadane or macenko
         self.stain_extractor.fit(img)
-        return self.stain_extractor.stain_matrix_target
+        stain_matrix = self.stain_extractor.stain_matrix_target
+        if stain_matrix is None:
+            raise RuntimeError("Stain extractor did not produce a stain matrix.")
+        return stain_matrix
 
     def apply(
         self,
@@ -984,6 +980,8 @@ class HEStain(ImageOnlyTransform):
             image = data["volume"][0]
         elif "volumes" in data:
             image = data["volumes"][0][0]
+        else:
+            raise RuntimeError("Expected image, images, volume, or volumes data for stain augmentation")
 
         stain_matrix = self._get_stain_matrix(image)
 

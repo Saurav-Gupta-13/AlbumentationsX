@@ -107,7 +107,7 @@ def generate_random_fill(
     """
     max_value = MAX_VALUES_BY_DTYPE[dtype]
     if np.issubdtype(dtype, np.integer):
-        return random_generator.integers(0, max_value + 1, size=shape, dtype=dtype)
+        return random_generator.integers(0, int(max_value) + 1, size=shape, dtype=dtype)
     if np.issubdtype(dtype, np.floating):
         return random_generator.uniform(0, max_value, size=shape).astype(dtype)
     raise ValueError(f"Unsupported dtype: {dtype}")
@@ -144,9 +144,9 @@ def apply_inpainting(img: ImageType, holes: np.ndarray, method: Literal["inpaint
         img_3ch = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         result = cv2.inpaint(img_3ch, mask, 3, inpaint_method)
         # Always add channel dimension back since all images now have channel dimension
-        return cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)[..., None]
+        return cast("ImageType", cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)[..., None])
 
-    return cv2.inpaint(img, mask, 3, inpaint_method)
+    return cast("ImageType", cv2.inpaint(img, mask, 3, inpaint_method))
 
 
 def fill_holes_with_value(img: ImageType, holes: np.ndarray, fill: np.ndarray) -> ImageType:
@@ -463,7 +463,7 @@ def cutout_on_volume(
             ]
             result = np.array(processed_images)
             # Reshape to original volume shape: (D, H, W, C) or (D, H, W)
-            return result.reshape(volume.shape)
+            return cast("ImageType", result.reshape(volume.shape))
         if fill == "random":
             return fill_volume_holes_with_random(volume, holes, random_generator, uniform=False)
         if fill == "random_uniform":
@@ -743,7 +743,7 @@ def calculate_grid_dimensions(
     if unit_size_range is not None:
         if unit_size_range[1] > min(image_shape[:2]):
             raise ValueError("Grid size limits must be within the shortest image edge.")
-        unit_size = random_generator.integers(unit_size_range[0], unit_size_range[1] + 1)
+        unit_size = int(random_generator.integers(unit_size_range[0], unit_size_range[1] + 1))
         return unit_size, unit_size
 
     if holes_number_xy:

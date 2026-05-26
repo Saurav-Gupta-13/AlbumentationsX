@@ -43,6 +43,7 @@ __all__ = [
     "BaseCompose",
     "BboxParams",
     "Compose",
+    "ComposeTransformNotFoundError",
     "KeypointParams",
     "OneOf",
     "OneOrOther",
@@ -104,7 +105,7 @@ def _wrap_scalars_for_replay(cls: type, config: dict[str, Any]) -> dict[str, Any
     that expect ranges (e.g. blur_range=5 becomes (5,5)) to skip symmetric expansion.
     """
     range_params = _get_range_param_names(cls)
-    result = {}
+    result: dict[str, Any] = {}
     for key, value in config.items():
         if key in range_params and not isinstance(value, (tuple, list)):
             result[key] = (value, value)
@@ -117,6 +118,13 @@ REPR_INDENT_STEP = 2
 
 TransformType = Union[BasicTransform, "BaseCompose"]
 TransformsSeqType = list[TransformType]
+
+
+class ComposeTransformNotFoundError(ArithmeticError, ValueError):
+    """Raised when compose subtraction cannot find a requested transform class, preserving ValueError
+    compatibility while satisfying operator semantics.
+    """
+
 
 AVAILABLE_KEYS = (
     "image",
@@ -233,7 +241,7 @@ class BaseCompose(Serializable):
     """
 
     _transforms_dict: dict[int, BasicTransform] | None = None
-    check_each_transform: tuple[DataProcessor, ...] | None = None
+    check_each_transform: tuple[DataProcessor[Any], ...] | None = None
     main_compose: bool = True
 
     def __init__(
@@ -330,7 +338,7 @@ class BaseCompose(Serializable):
         for transform in transforms:
             if isinstance(transform, BasicTransform):
                 if hasattr(transform, "mask_interpolation") and self.mask_interpolation is not None:
-                    transform.mask_interpolation = self.mask_interpolation
+                    cast("Any", transform).mask_interpolation = self.mask_interpolation
             elif isinstance(transform, BaseCompose):
                 transform.set_mask_interpolation(self.mask_interpolation)
 
@@ -747,7 +755,7 @@ class BaseCompose(Serializable):
         """
         return self._combine_transforms(other, prepend=True)
 
-    def __sub__(self, other: type[BasicTransform]) -> "BaseCompose | type[NotImplemented]":
+    def __sub__(self, other: type[BasicTransform]) -> "BaseCompose | types.NotImplementedType":
         """Remove transform by class type. Removes first matching; returns new instance.
         Use - (e.g. compose - A.HorizontalFlip). Returns NotImplemented for other types.
 
@@ -757,10 +765,10 @@ class BaseCompose(Serializable):
             other (type[BasicTransform]): Transform class to remove (e.g., A.HorizontalFlip)
 
         Returns:
-            BaseCompose | type[NotImplemented]: New compose instance with transform removed, or NotImplemented.
+            BaseCompose | types.NotImplementedType: New compose instance with transform removed, or NotImplemented.
 
         Raises:
-            ValueError: If no transform of that type is found in the compose
+            ComposeTransformNotFoundError: If no transform of that type is found in the compose
 
         Note:
             If multiple transforms of the same type exist in the compose,
@@ -789,7 +797,7 @@ class BaseCompose(Serializable):
 
         # No matching transform found
         class_name = other.__name__
-        raise ValueError(f"No transform of type {class_name} found in the compose pipeline")
+        raise ComposeTransformNotFoundError(f"No transform of type {class_name} found in the compose pipeline")
 
     def _create_new_instance(self, new_transforms: TransformsSeqType) -> "BaseCompose":
         """Create new instance of same class with new transforms. Copies init params
@@ -1997,7 +2005,7 @@ class Compose(BaseCompose, HubMixin):
         kp_ids: np.ndarray,
     ) -> dict[str, Any]:
         inst: dict[str, Any] = {}
-        self._repack_mask_into(inst, data, binding, int(mask_row_idx))
+        self._repack_mask_into(inst, data, binding, mask_row_idx)
         self._repack_bbox_into(inst, data, binding, bbox_row_idx)
         self._repack_keypoints_into(inst, data, binding, kp_group_id, kp_ids)
         self._repack_bbox_labels_into(inst, data, bbox_row_idx)

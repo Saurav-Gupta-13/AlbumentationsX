@@ -7,7 +7,7 @@ such as spatial dimensions, apply dropout effects, and perform symmetry operatio
 interface and implements specific 3D augmentation logic.
 """
 
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, cast
 
 import numpy as np
 from pydantic import AfterValidator, field_validator, model_validator
@@ -31,6 +31,13 @@ __all__ = [
 ]
 
 NUM_DIMENSIONS = 3
+
+
+class _BaseCropAndPad3DInitSchema(BaseTransformInitSchema):
+    pad_if_needed: bool
+    fill: tuple[float, ...] | float
+    fill_mask: tuple[float, ...] | float
+    pad_position: Literal["center", "random"]
 
 
 class BasePad3D(Transform3D):
@@ -109,7 +116,7 @@ class BasePad3D(Transform3D):
 
     _targets = (Targets.VOLUME, Targets.MASK3D, Targets.KEYPOINTS)
 
-    class InitSchema(Transform3D.InitSchema):
+    class InitSchema(BaseTransformInitSchema):
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
 
@@ -526,11 +533,7 @@ class BaseCropAndPad3D(Transform3D):
 
     _targets = (Targets.VOLUME, Targets.MASK3D, Targets.KEYPOINTS)
 
-    class InitSchema(Transform3D.InitSchema):
-        pad_if_needed: bool
-        fill: tuple[float, ...] | float
-        fill_mask: tuple[float, ...] | float
-        pad_position: Literal["center", "random"]
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _BaseCropAndPad3DInitSchema
 
     def __init__(
         self,
@@ -1066,7 +1069,7 @@ class CoarseDropout3D(Transform3D):
 
     _targets = (Targets.VOLUME, Targets.MASK3D, Targets.KEYPOINTS)
 
-    class InitSchema(Transform3D.InitSchema):
+    class InitSchema(BaseTransformInitSchema):
         num_holes_range: Annotated[
             tuple[int, int],
             AfterValidator(check_range_bounds(0, None)),
@@ -1415,7 +1418,7 @@ class GridShuffle3D(Transform3D):
         self,
         keypoints: np.ndarray,
         tiles: np.ndarray,
-        mapping: np.ndarray,
+        mapping: list[int],
         **params: Any,
     ) -> np.ndarray:
         return f3d.swap_tiles_on_keypoints_3d(keypoints, tiles, mapping)
@@ -1424,7 +1427,7 @@ class GridShuffle3D(Transform3D):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray | list[int]]:
         # Get volume shape directly from data
         if "volume" in data:
             volume_shape = data["volume"].shape[:3]  # Get (D, H, W) from volume

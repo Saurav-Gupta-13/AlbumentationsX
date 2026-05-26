@@ -11,7 +11,7 @@ import inspect
 import random
 from collections.abc import Callable, Sequence
 from copy import deepcopy
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 from warnings import warn
 
 import cv2
@@ -41,6 +41,10 @@ class BaseTransformInitSchema(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     p: float = Field(ge=0, le=1)
     strict: bool
+
+
+class _BasicTransformInitSchema(BaseTransformInitSchema):
+    pass
 
 
 class CombinedMeta(SerializableMeta, ValidatedTransformMeta):
@@ -93,9 +97,7 @@ class BasicTransform(Serializable, metaclass=CombinedMeta):
     replay_mode = False
     applied_in_replay = False
 
-    class InitSchema(BaseTransformInitSchema):
-        pass
-
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _BasicTransformInitSchema
     _valid_applied_config_keys_cache: ClassVar[frozenset[str] | None] = None
 
     def __init__(self, p: float = 0.5):
@@ -333,8 +335,15 @@ class BasicTransform(Serializable, metaclass=CombinedMeta):
                             all_param_names.add(name)
                 except (ValueError, TypeError):
                     continue
-            cls._valid_applied_config_keys_cache = frozenset(all_param_names - {"self", "strict"})
-        return cls._valid_applied_config_keys_cache  # type: ignore[return-value]
+            valid_keys = frozenset(all_param_names - {"self", "strict"})
+            cls._valid_applied_config_keys_cache = valid_keys
+            return valid_keys
+
+        cached_keys = cls._valid_applied_config_keys_cache
+        if cached_keys is None:
+            msg = f"Valid applied config key cache was not initialized for {cls.__name__}"
+            raise RuntimeError(msg)
+        return cached_keys
 
     def _build_applied_config(self) -> None:
         """Assemble the final applied_config by merging all constructor defaults with sampled overrides,
@@ -406,7 +415,7 @@ class BasicTransform(Serializable, metaclass=CombinedMeta):
         """Apply transforms with parameters. Dispatches each target (image, mask, bboxes, etc.) to
         the corresponding apply_* method.
         """
-        res = {}
+        res: dict[str, Any] = {}
         for key, arg in kwargs.items():
             if key in self._key2func and arg is not None:
                 # Handle empty lists for mask-like keys
@@ -983,7 +992,10 @@ class DualTransform(BasicTransform):
         """
         if masks.size == 0:
             return masks
-        return self._apply_to_batch(masks, lambda mask: self.apply_to_mask(mask, *args, **params))
+        return cast(
+            "StackedMasks4D",
+            self._apply_to_batch(masks, lambda mask: self.apply_to_mask(mask, *args, **params)),
+        )
 
     @batch_transform("spatial")
     def apply_to_mask3d(self, mask3d: VolumeType, *args: Any, **params: Any) -> VolumeType:
@@ -1393,7 +1405,8 @@ class CustomTransformsApplyMixin:
 
     def _set_keys(self) -> None:
         # Build _key2func from self.targets using base class
-        super()._set_keys()  # type: ignore[misc]
+        base_set_keys = cast("Callable[[Any], None]", BasicTransform.__dict__["_set_keys"])
+        base_set_keys(self)
 
         # Search apply_to_<X> functions defined within the child class
         for name, method in inspect.getmembers(self, predicate=inspect.ismethod):

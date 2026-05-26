@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from ._functional_color import (
     equalize,
@@ -10,6 +10,7 @@ from ._functional_color import (
 from ._functional_shared import (
     MAX_VALUES_BY_DTYPE,
     ImageType,
+    ImageUInt8,
     add,
     add_weighted,
     clip,
@@ -26,6 +27,8 @@ from ._functional_shared import (
 from ._functional_sharpness import (
     convolve,
 )
+
+_maybe_process_in_chunks = cast("Any", maybe_process_in_chunks)
 
 
 @uint8_io
@@ -96,13 +99,13 @@ def add_snow_bleach(
     lightness_channel[mask] *= brightness_coeff
 
     # Clip the lightness values in place
-    lightness_channel = clip(lightness_channel, np.uint8, inplace=True)
+    lightness_channel = clip(lightness_channel, np.dtype(np.uint8), inplace=True)
 
     # Update the lightness channel in the original image
     image_hls[:, :, 1] = lightness_channel
 
     # Convert back to RGB
-    return cv2.cvtColor(image_hls, cv2.COLOR_HLS2RGB)
+    return cast("ImageType", cv2.cvtColor(image_hls, cv2.COLOR_HLS2RGB))
 
 
 def generate_snow_textures(
@@ -230,7 +233,7 @@ def add_snow_texture(
     )
 
     # Convert back to RGB
-    img_with_snow = cv2.cvtColor(img_with_snow.astype(np.uint8), cv2.COLOR_HSV2RGB)
+    img_with_snow = cast("ImageType", cv2.cvtColor(img_with_snow.astype(np.uint8), cv2.COLOR_HSV2RGB))
 
     # Add some sparkle effects for snow glitter
     img_with_snow[sparkle_mask] = [max_value, max_value, max_value]
@@ -273,7 +276,7 @@ def add_rain(
     if not rain_drops.size:
         return img.copy()
 
-    img = img.copy()
+    img = cast("ImageUInt8", img.copy())
 
     # Pre-allocate rain layer
     rain_layer = np.zeros_like(img, dtype=np.uint8)
@@ -286,7 +289,7 @@ def add_rain(
 
     cv2.polylines(
         rain_layer,
-        lines.astype(np.int32),
+        [line.astype(np.int32) for line in lines],
         False,
         drop_color,
         drop_width,
@@ -299,7 +302,8 @@ def add_rain(
     cv2.add(img, rain_layer, dst=img)
 
     if brightness_coefficient != 1.0:
-        cv2.multiply(img, brightness_coefficient, dst=img, dtype=cv2.CV_8U)
+        multiply = cast("Any", cv2.multiply)
+        multiply(img, brightness_coefficient, dst=img, dtype=cv2.CV_8U)
 
     return img
 
@@ -327,7 +331,7 @@ def get_fog_particle_radiuses(
     max_fog_radius = max(2, int(min(height, width) * 0.1 * fog_intensity))
     min_radius = max(1, max_fog_radius // 2)
 
-    return [random_generator.integers(min_radius, max_fog_radius) for _ in range(num_particles)]
+    return [int(random_generator.integers(min_radius, max_fog_radius)) for _ in range(num_particles)]
 
 
 @uint8_io
@@ -375,18 +379,18 @@ def add_fog(
         cv2.addWeighted(overlay, alpha, result, 1 - alpha, 0, dst=result)
 
     # Final subtle blur
-    blur_size = max(3, int(min(img.shape[:2]) // 30))
+    blur_size = max(3, min(img.shape[:2]) // 30)
     if blur_size % 2 == 0:
         blur_size += 1
 
-    result = cv2.GaussianBlur(result, (blur_size, blur_size), 0)
+    result = cast("ImageType", cv2.GaussianBlur(result, (blur_size, blur_size), 0))
 
-    return clip(result, np.uint8, inplace=True)
+    return clip(result, np.dtype(np.uint8), inplace=True)
 
 
 @uint8_io
 @preserve_channel_dim
-@maybe_process_in_chunks
+@_maybe_process_in_chunks
 def add_sun_flare_overlay(
     img: ImageType,
     flare_center: tuple[float, float],
@@ -642,7 +646,7 @@ def add_shadow(
         darkness = 1 - shadow_intensity
         img_shadowed[shadowed_indices] = clip(
             img_shadowed[shadowed_indices] * darkness,
-            np.uint8,
+            np.dtype(np.uint8),
             inplace=True,
         )
 
@@ -674,7 +678,7 @@ def add_gravel(img: ImageType, gravels: list[Any]) -> ImageType:
         min_y, max_y, min_x, max_x, sat = gravel
         image_hls[min_y:max_y, min_x:max_x, 1] = sat
 
-    return cv2.cvtColor(image_hls, cv2.COLOR_HLS2RGB)
+    return cast("ImageType", cv2.cvtColor(image_hls, cv2.COLOR_HLS2RGB))
 
 
 @float32_io
@@ -737,7 +741,7 @@ def get_rain_params(
         dict[str, Any]: Parameters for the rain effect.
 
     """
-    liquid_layer = clip(liquid_layer * 255, np.uint8, inplace=False)
+    liquid_layer = clip(liquid_layer * 255, np.dtype(np.uint8), inplace=False)
 
     # Generate distance transform with more defined edges
     dist = 255 - cv2.Canny(liquid_layer, 50, 150)
@@ -745,14 +749,17 @@ def get_rain_params(
     _, dist = cv2.threshold(dist, 20, 20, cv2.THRESH_TRUNC)
 
     # Use separate blur operations for better drop formation
-    dist = cv2.GaussianBlur(
-        dist,
-        ksize=(3, 3),
-        sigmaX=1,  # Add slight sigma for smoother drops
-        sigmaY=1,
-        borderType=cv2.BORDER_REPLICATE,
+    dist = cast(
+        "ImageType",
+        cv2.GaussianBlur(
+            dist,
+            ksize=(3, 3),
+            sigmaX=1,  # Add slight sigma for smoother drops
+            sigmaY=1,
+            borderType=cv2.BORDER_REPLICATE,
+        ),
     )
-    dist = clip(dist, np.uint8, inplace=True)
+    dist = clip(dist, np.dtype(np.uint8), inplace=True)
 
     dist = dist[..., np.newaxis]
 

@@ -19,15 +19,7 @@ from albucore import (
 from albumentations.core.type_definitions import PAIR, ImageType
 
 if TYPE_CHECKING:
-    from PIL import Image
-
-# Optional dependencies
-try:
-    from PIL import Image
-
-    _PIL_AVAILABLE = True
-except ImportError:
-    _PIL_AVAILABLE = False
+    from PIL.Image import Image as PILImage
 
 
 def delete_random_words(words: list[str], num_words: int, py_random: random.Random) -> str:
@@ -115,7 +107,7 @@ def insert_random_stopwords(
     return " ".join(words)
 
 
-def convert_image_to_pil(image: ImageType) -> "Image":
+def convert_image_to_pil(image: ImageType) -> "PILImage":
     """Convert a NumPy array image (H,W,C) to a PIL Image. Grayscale (C=1) or RGB (C=3). Used by
     render_text for text drawing. Requires Pillow.
     """
@@ -133,7 +125,7 @@ def convert_image_to_pil(image: ImageType) -> "Image":
     raise TypeError(f"Unsupported image shape: {image.shape}")
 
 
-def draw_text_on_pil_image(pil_image: "Image", metadata_list: list[dict[str, Any]]) -> "Image":
+def draw_text_on_pil_image(pil_image: "PILImage", metadata_list: list[dict[str, Any]]) -> "PILImage":
     """Draw text on PIL image from metadata_list (bbox_coords, text, font, font_color). Mutates image.
     Used by render_text for grayscale and RGB. Requires Pillow.
     """

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ._functional_shared import (
     MAX_VALUES_BY_DTYPE,
@@ -240,7 +240,7 @@ def generate_spatial_noise(
     if params is None:
         return np.zeros(shape, dtype=np.float32)
 
-    cv2_seed = random_generator.integers(0, 2**16)
+    cv2_seed = int(random_generator.integers(0, 2**16))
     cv2.setRNGSeed(cv2_seed)
 
     if spatial_mode == "shared":
@@ -494,11 +494,14 @@ def sharpen_gaussian(
         ImageType: The sharpened image.
 
     """
-    blurred = cv2.GaussianBlur(
-        img,
-        ksize=(kernel_size, kernel_size),
-        sigmaX=sigma,
-        sigmaY=sigma,
+    blurred = cast(
+        "ImageType",
+        cv2.GaussianBlur(
+            img,
+            ksize=(kernel_size, kernel_size),
+            sigmaX=sigma,
+            sigmaY=sigma,
+        ),
     )
     return add_weighted(img, 1.0 + alpha, blurred, -alpha)
 

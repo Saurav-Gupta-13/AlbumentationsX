@@ -5,7 +5,7 @@ and other grid-like data representations where masking in specific directions (t
 can improve model robustness and generalization.
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import numpy as np
 from pydantic import model_validator
@@ -20,6 +20,40 @@ from albumentations.core.pydantic import (
 from albumentations.core.transforms_interface import BaseTransformInitSchema
 
 __all__ = ["XYMasking"]
+
+
+class _XYMaskingInitSchema(BaseTransformInitSchema):
+    num_masks_x_range: Annotated[
+        tuple[int, int],
+        AfterValidator(check_range_bounds(0)),
+        AfterValidator(nondecreasing),
+    ]
+    num_masks_y_range: Annotated[
+        tuple[int, int],
+        AfterValidator(check_range_bounds(0)),
+        AfterValidator(nondecreasing),
+    ]
+    mask_x_length_range: Annotated[
+        tuple[int, int],
+        AfterValidator(check_range_bounds(0)),
+        AfterValidator(nondecreasing),
+    ]
+    mask_y_length_range: Annotated[
+        tuple[int, int],
+        AfterValidator(check_range_bounds(0)),
+        AfterValidator(nondecreasing),
+    ]
+
+    fill: tuple[float, ...] | float | Literal["random", "random_uniform", "inpaint_telea", "inpaint_ns"]
+    fill_mask: tuple[float, ...] | float | None
+
+    @model_validator(mode="after")
+    def _check_mask_length(self) -> Self:
+        if self.mask_x_length_range[1] <= 0 and self.mask_y_length_range[1] <= 0:
+            msg = "At least one of `mask_x_length_range` or `mask_y_length_range` must have a positive max value."
+            raise ValueError(msg)
+
+        return self
 
 
 class XYMasking(BaseDropout):
@@ -65,38 +99,7 @@ class XYMasking(BaseDropout):
 
     """
 
-    class InitSchema(BaseTransformInitSchema):
-        num_masks_x_range: Annotated[
-            tuple[int, int],
-            AfterValidator(check_range_bounds(0)),
-            AfterValidator(nondecreasing),
-        ]
-        num_masks_y_range: Annotated[
-            tuple[int, int],
-            AfterValidator(check_range_bounds(0)),
-            AfterValidator(nondecreasing),
-        ]
-        mask_x_length_range: Annotated[
-            tuple[int, int],
-            AfterValidator(check_range_bounds(0)),
-            AfterValidator(nondecreasing),
-        ]
-        mask_y_length_range: Annotated[
-            tuple[int, int],
-            AfterValidator(check_range_bounds(0)),
-            AfterValidator(nondecreasing),
-        ]
-
-        fill: tuple[float, ...] | float | Literal["random", "random_uniform", "inpaint_telea", "inpaint_ns"]
-        fill_mask: tuple[float, ...] | float | None
-
-        @model_validator(mode="after")
-        def _check_mask_length(self) -> Self:
-            if self.mask_x_length_range[1] <= 0 and self.mask_y_length_range[1] <= 0:
-                msg = "At least one of `mask_x_length_range` or `mask_y_length_range` must have a positive max value."
-                raise ValueError(msg)
-
-            return self
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _XYMaskingInitSchema
 
     def __init__(
         self,
@@ -133,7 +136,7 @@ class XYMasking(BaseDropout):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, int | np.ndarray]:
         image_shape = params["shape"][:2]
 
         height, width = image_shape
@@ -153,7 +156,7 @@ class XYMasking(BaseDropout):
             "mask_y_length_range": self.mask_y_length_range,
         }
 
-        return {"holes": holes, "seed": self.random_generator.integers(0, 2**32 - 1)}
+        return {"holes": holes, "seed": int(self.random_generator.integers(0, 2**32 - 1))}
 
     def _generate_mask_size(self, mask_length: tuple[int, int]) -> int:
         return self.py_random.randint(*mask_length)

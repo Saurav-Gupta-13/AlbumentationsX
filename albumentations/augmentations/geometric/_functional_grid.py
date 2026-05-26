@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from random import Random
 from typing import Literal
 
 from ._functional_shared import (
@@ -68,8 +69,8 @@ def generate_grid(
     prev = 0.0
     for idx, step in enumerate(steps_x):
         x = idx * x_step
-        start = int(x)
-        end = min(int(x) + x_step, width)
+        start = x
+        end = min(x + x_step, width)
         cur = prev + x_step * step
         xx[start:end] = np.linspace(prev, cur, end - start)
         prev = cur
@@ -79,13 +80,14 @@ def generate_grid(
     prev = 0.0
     for idx, step in enumerate(steps_y):
         y = idx * y_step
-        start = int(y)
-        end = min(int(y) + y_step, height)
+        start = y
+        end = min(y + y_step, height)
         cur = prev + y_step * step
         yy[start:end] = np.linspace(prev, cur, end - start)
         prev = cur
 
-    return np.meshgrid(xx, yy)
+    map_x, map_y = np.meshgrid(xx, yy)
+    return map_x, map_y
 
 
 def normalize_grid_distortion_steps(
@@ -132,10 +134,10 @@ def normalize_grid_distortion_steps(
     ty = height / math.floor(height / num_steps)
     x_steps_arr = np.array(x_steps, dtype=np.float32)
     y_steps_arr = np.array(y_steps, dtype=np.float32)
-    x_steps = x_steps_arr * (tx / reduce_sum(x_steps_arr))
-    y_steps = y_steps_arr * (ty / reduce_sum(y_steps_arr))
+    normalized_x_steps = x_steps_arr * (tx / float(reduce_sum(x_steps_arr)))
+    normalized_y_steps = y_steps_arr * (ty / float(reduce_sum(y_steps_arr)))
 
-    return {"steps_x": x_steps, "steps_y": y_steps}
+    return {"steps_x": normalized_x_steps, "steps_y": normalized_y_steps}
 
 
 def almost_equal_intervals(n: int, parts: int) -> np.ndarray:
@@ -331,7 +333,7 @@ def compute_perspective_params(
         dim2: np.ndarray,
         min_size: int = 2,
     ) -> float:
-        size = np.sqrt(reduce_sum((dim1 - dim2) ** 2))
+        size = float(np.sqrt(reduce_sum((dim1 - dim2) ** 2)))
         if size < min_size:
             step_size = (min_size - size) / 2
             dim1[dim1 > dim2] += step_size
@@ -463,7 +465,7 @@ def adjust_padding_by_position(
     w_left: int,
     w_right: int,
     position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"],
-    py_random: np.random.RandomState,
+    py_random: Random,
 ) -> tuple[int, int, int, int]:
     """Adjust padding (h_top, h_bottom, w_left, w_right) by position: center,
     top_left, top_right, bottom_*, or random. py_random for random. For PadIfNeeded.

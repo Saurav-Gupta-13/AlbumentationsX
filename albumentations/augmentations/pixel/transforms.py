@@ -9,7 +9,6 @@ import math
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
-import cv2
 import numpy as np
 from albucore import (
     normalize,
@@ -33,7 +32,7 @@ from albumentations.core.transforms_interface import (
     BaseTransformInitSchema,
     ImageOnlyTransform,
 )
-from albumentations.core.type_definitions import ImageType, VolumeType
+from albumentations.core.type_definitions import CV2_INTER_LINEAR, FullInterpolationType, ImageType, VolumeType
 
 __all__ = [
     "Dithering",
@@ -157,11 +156,15 @@ class Normalize(ImageOnlyTransform):
     ):
         super().__init__(p=p)
         self.mean = mean
-        self.mean_np = np.array(mean, dtype=np.float32) * max_pixel_value
         self.std = std
-        self.denominator = np.reciprocal(
-            np.array(std, dtype=np.float32) * max_pixel_value,
-        )
+        if mean is not None and std is not None and max_pixel_value is not None:
+            self.mean_np = np.array(mean, dtype=np.float32) * max_pixel_value
+            self.denominator = np.reciprocal(
+                np.array(std, dtype=np.float32) * max_pixel_value,
+            )
+        else:
+            self.mean_np = np.array([], dtype=np.float32)
+            self.denominator = np.array([], dtype=np.float32)
         self.max_pixel_value = max_pixel_value
         self.normalization = normalization
 
@@ -378,8 +381,8 @@ class Sharpen(ImageOnlyTransform):
 
     @staticmethod
     def __generate_sharpening_matrix(
-        alpha: np.ndarray,
-        lightness: np.ndarray,
+        alpha: float,
+        lightness: float,
     ) -> np.ndarray:
         matrix_nochange = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]], dtype=np.float32)
         matrix_effect = np.array(
@@ -414,6 +417,9 @@ class Sharpen(ImageOnlyTransform):
         **params: Any,
     ) -> ImageType:
         if self.method == "kernel":
+            if sharpening_matrix is None:
+                msg = "sharpening_matrix must be initialized when method is 'kernel'"
+                raise RuntimeError(msg)
             return fpixel.convolve(img, sharpening_matrix)
         return fpixel.sharpen_gaussian(img, alpha, self.kernel_size, self.sigma)
 
@@ -490,8 +496,8 @@ class Emboss(ImageOnlyTransform):
 
     @staticmethod
     def __generate_emboss_matrix(
-        alpha_sample: np.ndarray,
-        strength_sample: np.ndarray,
+        alpha_sample: float,
+        strength_sample: float,
     ) -> np.ndarray:
         matrix_nochange = np.array([[0, 0, 0], [0, 1, 0], [0, 0, 0]], dtype=np.float32)
         matrix_effect = np.array(
@@ -737,30 +743,14 @@ class Superpixels(ImageOnlyTransform):
             AfterValidator(check_range_bounds(1)),
         ]
         max_size: int | None = Field(ge=1)
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
+        interpolation: FullInterpolationType
 
     def __init__(
         self,
         p_replace_range: tuple[float, float] = (0, 0.1),
         n_segments_range: tuple[int, int] = (100, 100),
         max_size: int | None = 128,
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_LINEAR,
+        interpolation: FullInterpolationType = CV2_INTER_LINEAR,
         p: float = 0.5,
     ):
         super().__init__(p=p)

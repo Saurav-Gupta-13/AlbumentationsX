@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Literal, cast
+from collections.abc import Callable, Mapping
+from operator import index
+from typing import Literal, Protocol, cast
 
 from ._functional_shared import (
     NUM_KEYPOINTS_COLUMNS_IN_ALBUMENTATIONS,
@@ -48,6 +49,22 @@ ROT90_180_FACTOR = 2
 ROT90_270_FACTOR = 3
 
 C4_GROUP_ELEMENT_TO_K: dict[str, int] = {"e": 0, "r90": 1, "r180": 2, "r270": 3}
+
+_PadArray = Callable[..., np.ndarray]
+
+
+class _VipsImage(Protocol):
+    def resize(self, scale: float, *, vscale: float, kernel: object) -> _VipsImage:
+        """Return a resized pyvips image using the selected scale, vertical scale, and interpolation
+        kernel for the optional backend.
+        """
+        ...
+
+    def numpy(self) -> np.ndarray:
+        """Return image data as a NumPy array so the optional pyvips backend can rejoin the shared
+        image array pipeline cleanly after resize.
+        """
+        ...
 
 
 @lru_cache(maxsize=1)
@@ -128,7 +145,7 @@ def resize_pyvips(
     target_height, target_width = target_shape
     original_dtype = img.dtype
 
-    img_vips = pyvips.Image.new_from_array(img)
+    img_vips = cast("_VipsImage", pyvips.Image.new_from_array(img))
 
     scale_x = target_width / width
     scale_y = target_height / height
@@ -177,7 +194,7 @@ def resize_pil(
     # PIL doesn't support float32 RGB images, convert to uint8 if needed
     needs_conversion = img.dtype == np.float32
     if needs_conversion:
-        img = from_float(img, target_dtype=np.uint8)
+        img = from_float(cast("np.ndarray", img), target_dtype=np.dtype(np.uint8))
 
     # Map cv2 interpolation constants to PIL.Image.Resampling constants
     cv2_to_pil_interpolation = {
@@ -276,7 +293,7 @@ def perspective(
     matrix: np.ndarray,
     max_width: int,
     max_height: int,
-    border_val: float | list[float] | np.ndarray,
+    border_val: float | tuple[float, ...] | np.ndarray | None,
     border_mode: int,
     keep_size: bool,
     interpolation: int,
@@ -292,7 +309,7 @@ def perspective(
         matrix (np.ndarray): 3x3 perspective transformation matrix.
         max_width (int): Maximum width of the output image if keep_size is False.
         max_height (int): Maximum height of the output image if keep_size is False.
-        border_val (float | list[float] | np.ndarray): Border value(s) to fill areas outside the transformed image.
+        border_val (float | tuple[float, ...] | np.ndarray | None): Border value(s) for transformed borders.
         border_mode (int): OpenCV border mode (e.g., cv2.BORDER_CONSTANT, cv2.BORDER_REFLECT).
         keep_size (bool): If True, maintain the original image dimensions.
         interpolation (int): Interpolation method for resampling (cv2 interpolation flag).
@@ -318,7 +335,7 @@ def perspective_images(
     matrix: np.ndarray,
     max_width: int,
     max_height: int,
-    border_val: float | list[float] | np.ndarray,
+    border_val: float | tuple[float, ...] | np.ndarray | None,
     border_mode: int,
     keep_size: bool,
     interpolation: int,
@@ -331,7 +348,7 @@ def perspective_images(
         matrix (np.ndarray): 3x3 perspective transformation matrix.
         max_width (int): Maximum width of the output image if keep_size is False.
         max_height (int): Maximum height of the output image if keep_size is False.
-        border_val (float | list[float] | np.ndarray): Border value(s) to fill areas outside the transformed image.
+        border_val (float | tuple[float, ...] | np.ndarray | None): Border value(s) for transformed borders.
         border_mode (int): OpenCV border mode (e.g., cv2.BORDER_CONSTANT).
         keep_size (bool): If True, maintain the original image dimensions.
         interpolation (int): Interpolation method for resampling (cv2 interpolation flag).
@@ -359,7 +376,7 @@ def perspective_images(
         flat = images if images.ndim == 3 else images[:, :, :, 0]  # (N,H,W)
         if height * width <= _stack_px:
             stacked = np.ascontiguousarray(flat.transpose(1, 2, 0))  # (H,W,N)
-            border_scalar = border_val[0] if isinstance(border_val, (list, np.ndarray)) else border_val
+            border_scalar = border_val[0] if isinstance(border_val, (tuple, np.ndarray)) else border_val
             warped = warp_perspective(
                 stacked,
                 adjusted_matrix,
@@ -632,7 +649,7 @@ def transpose(img: ImageType) -> ImageType:
     """
     num_channels = img.shape[-1]
     if img.ndim == NUM_MULTI_CHANNEL_DIMENSIONS and num_channels in {1, 3, 4}:
-        result = cv2.transpose(img if num_channels != 1 else img[..., 0])
+        result = cast("ImageType", cv2.transpose(img if num_channels != 1 else img[..., 0]))
         return result[..., None] if num_channels == 1 else result
 
     # Generate the new axes order
@@ -731,10 +748,10 @@ def rot90(img: ImageType, group_element: Literal["e", "r90", "r180", "r270"]) ->
             rotate_code = cv2.ROTATE_90_CLOCKWISE
 
         cv2_input = img if num_channels != 1 else img[..., 0]
-        result = cv2.rotate(cv2_input, rotate_code)
+        result = cast("ImageType", cv2.rotate(cv2_input, rotate_code))
         return result[..., None] if num_channels == 1 else result
 
-    return np.rot90(img, rot90_count)
+    return cast("ImageType", np.rot90(img, rot90_count))
 
 
 def rot90_images(images: ImageType, group_element: Literal["e", "r90", "r180", "r270"]) -> ImageType:
@@ -757,7 +774,7 @@ def rot90_images(images: ImageType, group_element: Literal["e", "r90", "r180", "
 
     """
     rot90_count = C4_GROUP_ELEMENT_TO_K[group_element]
-    return np.rot90(images, k=rot90_count, axes=(1, 2))
+    return cast("ImageType", np.rot90(images, k=rot90_count, axes=(1, 2)))
 
 
 @preserve_channel_dim
@@ -861,12 +878,12 @@ def pad_with_params(
             value = (float(value),) * min(num_channels, 4)
         elif isinstance(value, (tuple, list)) and len(value) < num_channels:
             # Extend to match channels; use scalar for >4ch to avoid albucore chunked path
-            val_list = [float(v) for v in value]
+            val_list = list(value)
             if num_channels <= 4:
                 last = val_list[-1] if val_list else 0.0
                 value = tuple(val_list) + (last,) * (num_channels - len(val_list))
             else:
-                value = (float(val_list[0]),) * 4
+                value = (val_list[0],) * 4
 
     return albucore_copy_make_border(
         img,
@@ -929,7 +946,8 @@ def pad_images_with_params(
     else:
         kwargs = {}
 
-    images = np.pad(images, pad_width=pad_width, mode=mode, **kwargs)
+    pad_array = cast("_PadArray", np.pad)
+    images = cast("ImageType", pad_array(images, pad_width=pad_width, mode=mode, **kwargs))
     if no_channel_dim:
         images = images[..., 0]
 
@@ -1045,7 +1063,7 @@ def distort_image(
         )
 
         mask[:] = 0
-        cv2.fillConvexPoly(mask, np.int32(dst_quad), 255)
+        cv2.fillConvexPoly(mask, dst_quad.astype(np.int32), 255)
 
         distorted_image = cv2.copyTo(warped, mask, distorted_image)
 
@@ -1182,9 +1200,9 @@ def compute_affine_warp_output_shape(
     out_width = maxc - minc + 1
 
     output_shape_tuple: tuple[int, ...] = (
-        (int(out_height), int(out_width), int(input_shape[2]))
+        (index(out_height), index(out_width), input_shape[2])
         if len(input_shape) == NUM_MULTI_CHANNEL_DIMENSIONS
-        else (int(out_height), int(out_width))
+        else (index(out_height), index(out_width))
     )
 
     # fit output image in new shape
@@ -1328,7 +1346,7 @@ def erode(img: ImageType, kernel: np.ndarray) -> ImageType:
         ImageType: The eroded image.
 
     """
-    return cv2.erode(img, kernel, iterations=1)
+    return cast("ImageType", cv2.erode(img, kernel, iterations=1))
 
 
 @preserve_channel_dim
@@ -1346,7 +1364,7 @@ def dilate(img: ImageType, kernel: np.ndarray) -> ImageType:
         ImageType: The dilated image.
 
     """
-    return cv2.dilate(img, kernel, iterations=1)
+    return cast("ImageType", cv2.dilate(img, kernel, iterations=1))
 
 
 def morphology(

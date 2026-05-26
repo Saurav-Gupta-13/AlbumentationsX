@@ -2,7 +2,7 @@
 defocus, zoom). Each transform documents its parameters and behavior in Args and Examples.
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 import numpy as np
 from albucore import median_blur, reduce_sum
@@ -52,6 +52,10 @@ class BlurInitSchema(BaseTransformInitSchema):
     @classmethod
     def _process_blur(cls, value: tuple[int, int], info: ValidationInfo) -> tuple[int, int]:
         return fblur.process_blur_range(value, info, min_value=3)
+
+
+class _BlurTransformInitSchema(BlurInitSchema):
+    pass
 
 
 class Blur(ImageOnlyTransform):
@@ -135,8 +139,7 @@ class Blur(ImageOnlyTransform):
 
     """
 
-    class InitSchema(BlurInitSchema):
-        pass
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _BlurTransformInitSchema
 
     def __init__(
         self,
@@ -397,7 +400,9 @@ class MotionBlur(Blur):
         self.angle_range = angle_range
         self.direction_range = direction_range
 
-    def apply(self, img: ImageType, kernel: np.ndarray, **params: Any) -> ImageType:
+    def apply(self, img: ImageType, kernel: int | np.ndarray, **params: Any) -> ImageType:
+        if isinstance(kernel, int):
+            return fblur.box_blur(img, kernel)
         return fpixel.convolve(img, kernel=kernel)
 
     def get_params(self) -> dict[str, Any]:
@@ -424,7 +429,7 @@ class MotionBlur(Blur):
             random_state=self.py_random,
         )
 
-        return {"kernel": kernel.astype(np.float32) / reduce_sum(kernel)}
+        return {"kernel": kernel.astype(np.float32) / float(reduce_sum(kernel))}
 
 
 class MedianBlur(Blur):
@@ -813,7 +818,7 @@ class GaussianBlur(ImageOnlyTransform):
     ) -> ImageType:
         return fpixel.separable_convolve(img, kernel=kernel)
 
-    def get_params_dependent_on_data(self, params: dict[str, Any], data: dict[str, Any]) -> dict[str, float]:
+    def get_params_dependent_on_data(self, params: dict[str, Any], data: dict[str, Any]) -> dict[str, np.ndarray]:
         sigma = self.py_random.uniform(*self.sigma_range)
         ksize = self.py_random.randint(*self.blur_range)
         self.applied_config = {"sigma_range": sigma, "blur_range": ksize}
@@ -1249,7 +1254,7 @@ class AdvancedBlur(ImageOnlyTransform):
         @field_validator("beta_range")
         @classmethod
         def _check_beta_range(cls, value: tuple[float, float]) -> tuple[float, float]:
-            result = (float(value[0]), float(value[1]))
+            result = (value[0], value[1])
             if not (result[0] < 1.0 < result[1]):
                 raise ValueError(f"Beta range should include 1.0, got {result}")
             return result

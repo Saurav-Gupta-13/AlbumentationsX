@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from ._functional_distortion import (
     generate_inverse_distortion_map,
@@ -315,9 +315,10 @@ def to_distance_maps(
     dx = np.empty((height, width), dtype=np.float32)
     dy = np.empty_like(dx)
     magnitude = np.empty_like(dx)
+    subtract = cast("Any", cv2.subtract)
     for keypoint_idx, (x, y, *_) in enumerate(keypoints_array):
-        cv2.subtract(xx, float(x), dst=dx)
-        cv2.subtract(yy, float(y), dst=dy)
+        subtract(xx, float(x), dst=dx)
+        subtract(yy, float(y), dst=dy)
         cv2.magnitude(dx, dy, magnitude)
         distances[..., keypoint_idx] = magnitude
 
@@ -928,7 +929,7 @@ def flip_keypoints(
 def swap_tiles_on_keypoints(
     keypoints: np.ndarray,
     tiles: np.ndarray,
-    mapping: np.ndarray,
+    mapping: list[int],
 ) -> np.ndarray:
     """Reposition keypoints by tile swap mapping. tiles (M, 4), mapping (M,).
     Keypoints in tile i move to tile mapping[i]. For GridShuffle.
@@ -941,8 +942,8 @@ def swap_tiles_on_keypoints(
                                 Each row represents a keypoint's (x, y) coordinates.
         tiles (np.ndarray): A 2D numpy array of shape (M, 4) where M is the number of tiles.
                             Each row represents a tile's (start_y, start_x, end_y, end_x) coordinates.
-        mapping (np.ndarray): A 1D numpy array of shape (M,) where M is the number of tiles.
-                              Each element i contains the index of the tile that tile i should be swapped with.
+        mapping (list[int]): A list where each element i contains the index of the tile that tile i should be swapped
+            with.
 
     Returns:
         np.ndarray: A 2D numpy array of the same shape as the input keypoints, containing the new positions

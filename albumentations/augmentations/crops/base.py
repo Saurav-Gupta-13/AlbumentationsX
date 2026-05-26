@@ -1,12 +1,16 @@
 """Base crop transform classes and shared crop schemas."""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal, cast
 
 from ._transforms_shared import (
     ALL_TARGETS,
+    CV2_INTER_LINEAR,
+    CV2_INTER_NEAREST,
     AfterValidator,
     BaseTransformInitSchema,
+    BorderModeType,
     DualTransform,
+    FullInterpolationType,
     ImageType,
     StackedMasks4D,
     VolumeType,
@@ -151,7 +155,7 @@ class BaseCrop(DualTransform):
             # Assume mask shape is (H, W, C)
             crop_height = crop_coords[3] - crop_coords[1]
             crop_width = crop_coords[2] - crop_coords[0]
-            return np.empty((crop_height, crop_width, mask.shape[2]), dtype=mask.dtype)
+            return cast("ImageType", np.empty((crop_height, crop_width, mask.shape[2]), dtype=mask.dtype))
         return self.apply(mask, crop_coords, **params)
 
     def apply_to_masks(
@@ -201,7 +205,10 @@ class BaseCrop(DualTransform):
             # Assume mask3d shape is (D, H, W, C)
             crop_height = crop_coords[3] - crop_coords[1]
             crop_width = crop_coords[2] - crop_coords[0]
-            return np.empty((mask3d.shape[0], crop_height, crop_width, mask3d.shape[3]), dtype=mask3d.dtype)
+            return cast(
+                "VolumeType",
+                np.empty((mask3d.shape[0], crop_height, crop_width, mask3d.shape[3]), dtype=mask3d.dtype),
+            )
         return self.apply_to_images(mask3d, crop_coords, **params)
 
     def apply_to_masks3d(
@@ -215,7 +222,10 @@ class BaseCrop(DualTransform):
             # Assume masks3d shape is (N, D, H, W, C)
             crop_height = crop_coords[3] - crop_coords[1]
             crop_width = crop_coords[2] - crop_coords[0]
-            return np.empty((0, masks3d.shape[1], crop_height, crop_width, masks3d.shape[4]), dtype=masks3d.dtype)
+            return cast(
+                "VolumeType",
+                np.empty((0, masks3d.shape[1], crop_height, crop_width, masks3d.shape[4]), dtype=masks3d.dtype),
+            )
         return self.apply_to_volumes(masks3d, crop_coords, **params)
 
     @staticmethod
@@ -365,13 +375,7 @@ class BaseCropAndPad(BaseCrop):
 
     class InitSchema(BaseTransformInitSchema):
         pad_if_needed: bool
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
         pad_position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"]
@@ -379,13 +383,7 @@ class BaseCropAndPad(BaseCrop):
     def __init__(
         self,
         pad_if_needed: bool,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ],
+        border_mode: BorderModeType,
         fill: tuple[float, ...] | float,
         fill_mask: tuple[float, ...] | float,
         pad_position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"],
@@ -608,6 +606,12 @@ class BaseRandomSizedCropInitSchema(BaseTransformInitSchema):
     size: Annotated[tuple[int, int], AfterValidator(check_range_bounds(1, None))]
 
 
+class _BaseRandomSizedCropInitSchema(BaseRandomSizedCropInitSchema):
+    interpolation: FullInterpolationType
+    mask_interpolation: FullInterpolationType
+    area_for_downscale: Literal["image", "image_mask"] | None
+
+
 class _BaseRandomSizedCrop(DualTransform):
     """Abstract base for random crop then resize to fixed size. Subclasses pick crop region;
     output shape (height, width). Bboxes and keypoints scaled with the crop.
@@ -722,48 +726,13 @@ class _BaseRandomSizedCrop(DualTransform):
 
     """
 
-    class InitSchema(BaseRandomSizedCropInitSchema):
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
-        area_for_downscale: Literal["image", "image_mask"] | None
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _BaseRandomSizedCropInitSchema
 
     def __init__(
         self,
         size: tuple[int, int],
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_NEAREST,
+        interpolation: FullInterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: FullInterpolationType = CV2_INTER_NEAREST,
         area_for_downscale: Literal["image", "image_mask"] | None = None,
         p: float = 1.0,
     ):
@@ -806,7 +775,7 @@ class _BaseRandomSizedCrop(DualTransform):
         **params: Any,
     ) -> ImageType:
         crop = fcrops.crop(img, *crop_coords)
-        interpolation = self._get_interpolation_for_resize(crop.shape[:2], "image")
+        interpolation = self._get_interpolation_for_resize(cast("tuple[int, int]", crop.shape[:2]), "image")
         return fgeometric.resize(crop, self.size, interpolation)
 
     def apply_to_mask(
@@ -816,7 +785,7 @@ class _BaseRandomSizedCrop(DualTransform):
         **params: Any,
     ) -> ImageType:
         crop = fcrops.crop(mask, *crop_coords)
-        interpolation = self._get_interpolation_for_resize(crop.shape[:2], "mask")
+        interpolation = self._get_interpolation_for_resize(cast("tuple[int, int]", crop.shape[:2]), "mask")
         return fgeometric.resize(crop, self.size, interpolation)
 
     def apply_to_bboxes(
@@ -857,13 +826,13 @@ class _BaseRandomSizedCrop(DualTransform):
         crop = fcrops.volume_crop_yx(images, *crop_coords)
 
         # Get interpolation method based on crop dimensions
-        interpolation = self._get_interpolation_for_resize(crop.shape[1:3], "image")
+        interpolation = self._get_interpolation_for_resize(cast("tuple[int, int]", crop.shape[1:3]), "image")
 
         # Then resize the smaller cropped volume using the selected interpolation
         result = np.empty((images.shape[0], self.size[0], self.size[1], crop.shape[-1]), dtype=crop.dtype)
         for i in range(images.shape[0]):
             result[i] = fgeometric.resize(crop[i], self.size, interpolation)
-        return result
+        return cast("ImageType", result)
 
     def apply_to_mask3d(
         self,

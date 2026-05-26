@@ -13,7 +13,7 @@ and properly handle all target types including images, masks, bounding boxes, an
 """
 
 from numbers import Real
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import cv2
 import numpy as np
@@ -31,7 +31,7 @@ from albumentations.core.transforms_interface import (
     BaseTransformInitSchema,
     DualTransform,
 )
-from albumentations.core.type_definitions import ALL_TARGETS, ImageType
+from albumentations.core.type_definitions import ALL_TARGETS, CV2_BORDER_CONSTANT, BorderModeType, ImageType
 
 from . import functional as fgeometric
 
@@ -42,6 +42,13 @@ __all__ = [
 
 NUM_PADS_XY = 2
 NUM_PADS_ALL_SIDES = 4
+
+
+class _PadInitSchema(BaseTransformInitSchema):
+    padding: int | tuple[int, int] | tuple[int, int, int, int]
+    fill: tuple[float, ...] | float
+    fill_mask: tuple[float, ...] | float
+    border_mode: BorderModeType
 
 
 class Pad(DualTransform):
@@ -176,30 +183,14 @@ class Pad(DualTransform):
     _targets = ALL_TARGETS
     _supported_bbox_types: frozenset[str] = frozenset({"hbb", "obb"})
 
-    class InitSchema(BaseTransformInitSchema):
-        padding: int | tuple[int, int] | tuple[int, int, int, int]
-        fill: tuple[float, ...] | float
-        fill_mask: tuple[float, ...] | float
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _PadInitSchema
 
     def __init__(
         self,
         padding: int | tuple[int, int] | tuple[int, int, int, int] = 0,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         p: float = 1.0,
     ):
         super().__init__(p=p)
@@ -518,13 +509,7 @@ class PadIfNeeded(Pad):
         pad_height_divisor: int | None = Field(ge=1)
         pad_width_divisor: int | None = Field(ge=1)
         position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"]
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
@@ -551,13 +536,7 @@ class PadIfNeeded(Pad):
         pad_height_divisor: int | None = None,
         pad_width_divisor: int | None = None,
         position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"] = "center",
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 1.0,

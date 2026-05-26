@@ -8,6 +8,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from albumentations.core.serialization import Serializable
 from albumentations.core.serialization import load as load_transform
 from albumentations.core.serialization import save as save_transform
 
@@ -87,7 +88,9 @@ class HubMixin:
         save_path = save_directory / filename
 
         # save transforms
-        save_transform(self, save_path, data_format="json")  # type: ignore[arg-type]
+        if not isinstance(self, Serializable):
+            raise TypeError("HubMixin can only save Serializable transforms")
+        save_transform(self, save_path, data_format="json")
 
         return save_path
 
@@ -197,7 +200,7 @@ class HubMixin:
                 If True, avoid downloading the file and return the path to the local cached file if it exists.
 
         """
-        filename = cls._CONFIG_FILE_NAME_TEMPLATE.format(key)
+        filename: str = cls._CONFIG_FILE_NAME_TEMPLATE.format(key)
         directory_or_repo_id = Path(directory_or_repo_id)
         transform = None
 
@@ -218,6 +221,11 @@ class HubMixin:
             return transform
 
         # download the file from the Hub
+        if proxies is not None:
+            logger.warning(
+                "`proxies` is not supported by this huggingface_hub version; configure proxies via environment.",
+            )
+
         try:
             config_file = hf_hub_download(
                 repo_id=str(directory_or_repo_id).replace("\\", "/"),
@@ -225,7 +233,6 @@ class HubMixin:
                 revision=revision,
                 cache_dir=cache_dir,
                 force_download=force_download,
-                proxies=proxies,
                 token=token,
                 local_files_only=local_files_only,
             )
@@ -233,7 +240,7 @@ class HubMixin:
             return cls._from_pretrained(save_directory=directory, filename=filename)
 
         except HfHubHTTPError as e:
-            raise HfHubHTTPError(f"{filename} not found on the HuggingFace Hub") from e
+            raise HfHubHTTPError(f"{filename} not found on the HuggingFace Hub", response=e.response) from e
 
     @require_huggingface_hub
     def push_to_hub(

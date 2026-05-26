@@ -6,7 +6,7 @@ transformations like grid shuffling and thin plate splines.
 """
 
 import random
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, TypeVar, cast
 from warnings import warn
 
 import cv2
@@ -35,7 +35,17 @@ from albumentations.core.transforms_interface import (
     BaseTransformInitSchema,
     DualTransform,
 )
-from albumentations.core.type_definitions import ALL_TARGETS, ImageType, StackedMasks4D, VolumeType
+from albumentations.core.type_definitions import (
+    ALL_TARGETS,
+    CV2_BORDER_CONSTANT,
+    CV2_INTER_LINEAR,
+    CV2_INTER_NEAREST,
+    BorderModeType,
+    ImageType,
+    InterpolationType,
+    StackedMasks4D,
+    VolumeType,
+)
 
 from . import functional as fgeometric
 
@@ -50,6 +60,7 @@ __all__ = [
 
 NUM_PADS_XY = 2
 NUM_PADS_ALL_SIDES = 4
+RangeValueT = TypeVar("RangeValueT", int, float)
 
 
 class Perspective(DualTransform):
@@ -156,56 +167,20 @@ class Perspective(DualTransform):
         ]
         keep_size: bool
         fit_output: bool
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
+        interpolation: InterpolationType
+        mask_interpolation: InterpolationType
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
     def __init__(
         self,
         scale: tuple[float, float] = (0.05, 0.1),
         keep_size: bool = True,
         fit_output: bool = False,
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_NEAREST,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        interpolation: InterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: InterpolationType = CV2_INTER_NEAREST,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 0.5,
@@ -347,6 +322,84 @@ class Perspective(DualTransform):
             "max_width": max_width,
             "matrix_bbox": matrix,
         }
+
+
+class _AffineInitSchema(BaseTransformInitSchema):
+    scale: tuple[float, float] | dict[str, tuple[float, float]]
+    translate_percent: tuple[float, float] | dict[str, tuple[float, float]] | None
+    translate_px: tuple[int, int] | dict[str, tuple[int, int]] | None
+    rotate: tuple[float, float]
+    shear: tuple[float, float] | dict[str, tuple[float, float]]
+    interpolation: InterpolationType
+    mask_interpolation: InterpolationType
+
+    fill: tuple[float, ...] | float
+    fill_mask: tuple[float, ...] | float | None
+    border_mode: BorderModeType
+
+    fit_output: bool
+    keep_ratio: bool
+    rotate_method: Literal["largest_box", "ellipse"]
+    balanced_scale: bool
+
+    @field_validator("shear", "scale")
+    @classmethod
+    def _expand_shear_scale(
+        cls,
+        value: tuple[float, float] | dict[str, tuple[float, float]],
+        info: ValidationInfo,
+    ) -> dict[str, tuple[float, float]]:
+        return cls._handle_dict_arg(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _handle_translate(self) -> Self:
+        if self.translate_percent is None and self.translate_px is None:
+            self.translate_px = (0, 0)
+
+        if self.translate_percent is not None and self.translate_px is not None:
+            msg = "Expected either translate_percent or translate_px to be provided, but both were provided."
+            raise ValueError(msg)
+
+        if self.translate_percent is not None:
+            self.translate_percent = self._handle_dict_arg(
+                self.translate_percent,
+                "translate_percent",
+            )
+
+        if self.translate_px is not None:
+            self.translate_px = self._handle_dict_arg(
+                self.translate_px,
+                "translate_px",
+            )
+
+        return self
+
+    @model_validator(mode="after")
+    def _validate_keep_ratio_scale_compatibility(self) -> Self:
+        """Validate that when keep_ratio is True, x and y scale ranges are identical. Prevents
+        inconsistent Affine scale config; raises ValueError if scale x and y differ.
+        """
+        if self.keep_ratio and isinstance(self.scale, dict) and self.scale["x"] != self.scale["y"]:
+            raise ValueError(
+                f"When keep_ratio is True, the x and y scale range should be identical. got {self.scale}",
+            )
+        return self
+
+    @staticmethod
+    def _handle_dict_arg(
+        val: tuple[RangeValueT, RangeValueT] | dict[str, tuple[RangeValueT, RangeValueT]],
+        name: str | None,
+    ) -> dict[str, tuple[RangeValueT, RangeValueT]]:
+        if isinstance(val, dict):
+            if "x" not in val and "y" not in val:
+                raise ValueError(
+                    f'Expected {name} dictionary to contain at least key "x" or key "y". Found neither of them.',
+                )
+            default = val["x"] if "x" in val else val["y"]
+            x = val.get("x", default)
+            y = val.get("y", default)
+            return {"x": x, "y": y}
+        return {"x": val, "y": val}
 
 
 class Affine(DualTransform):
@@ -504,100 +557,7 @@ class Affine(DualTransform):
     _targets = ALL_TARGETS
     _supported_bbox_types: frozenset[str] = frozenset({"hbb", "obb"})
 
-    class InitSchema(BaseTransformInitSchema):
-        scale: tuple[float, float] | dict[str, tuple[float, float]]
-        translate_percent: tuple[float, float] | dict[str, tuple[float, float]] | None
-        translate_px: tuple[int, int] | dict[str, tuple[int, int]] | None
-        rotate: tuple[float, float]
-        shear: tuple[float, float] | dict[str, tuple[float, float]]
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
-
-        fill: tuple[float, ...] | float
-        fill_mask: tuple[float, ...] | float | None
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
-
-        fit_output: bool
-        keep_ratio: bool
-        rotate_method: Literal["largest_box", "ellipse"]
-        balanced_scale: bool
-
-        @field_validator("shear", "scale")
-        @classmethod
-        def _expand_shear_scale(
-            cls,
-            value: tuple[float, float] | dict[str, tuple[float, float]],
-            info: ValidationInfo,
-        ) -> dict[str, tuple[float, float]]:
-            return cls._handle_dict_arg(value, info.field_name)
-
-        @model_validator(mode="after")
-        def _handle_translate(self) -> Self:
-            if self.translate_percent is None and self.translate_px is None:
-                self.translate_px = (0, 0)
-
-            if self.translate_percent is not None and self.translate_px is not None:
-                msg = "Expected either translate_percent or translate_px to be provided, but both were provided."
-                raise ValueError(msg)
-
-            if self.translate_percent is not None:
-                self.translate_percent = self._handle_dict_arg(
-                    self.translate_percent,
-                    "translate_percent",
-                )
-
-            if self.translate_px is not None:
-                self.translate_px = self._handle_dict_arg(
-                    self.translate_px,  # type: ignore[arg-type]
-                    "translate_px",
-                )  # type: ignore[assignment]
-
-            return self
-
-        @model_validator(mode="after")
-        def _validate_keep_ratio_scale_compatibility(self) -> Self:
-            """Validate that when keep_ratio is True, x and y scale ranges are identical. Prevents
-            inconsistent Affine scale config; raises ValueError if scale x and y differ.
-            """
-            if self.keep_ratio and isinstance(self.scale, dict) and self.scale["x"] != self.scale["y"]:
-                raise ValueError(
-                    f"When keep_ratio is True, the x and y scale range should be identical. got {self.scale}",
-                )
-            return self
-
-        @staticmethod
-        def _handle_dict_arg(
-            val: tuple[float, float] | dict[str, tuple[float, float]],
-            name: str | None,
-        ) -> dict[str, tuple[float, float]]:
-            if isinstance(val, dict):
-                if "x" not in val and "y" not in val:
-                    raise ValueError(
-                        f'Expected {name} dictionary to contain at least key "x" or key "y". Found neither of them.',
-                    )
-                default = val.get("x", val.get("y"))
-                x = tuple(val.get("x", default))  # type: ignore[arg-type]
-                y = tuple(val.get("y", default))  # type: ignore[arg-type]
-                return {"x": x, "y": y}  # type: ignore[dict-item]
-            return {"x": tuple(val), "y": tuple(val)}  # type: ignore[dict-item]
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _AffineInitSchema
 
     def __init__(
         self,
@@ -606,31 +566,13 @@ class Affine(DualTransform):
         translate_px: tuple[int, int] | dict[str, tuple[int, int]] | None = None,
         rotate: tuple[float, float] = (0.0, 0.0),
         shear: tuple[float, float] | dict[str, tuple[float, float]] = (0.0, 0.0),
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_NEAREST,
+        interpolation: InterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: InterpolationType = CV2_INTER_NEAREST,
         fit_output: bool = False,
         keep_ratio: bool = True,
         rotate_method: Literal["largest_box", "ellipse"] = "largest_box",
         balanced_scale: bool = False,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float | None = None,
         p: float = 0.5,
@@ -643,8 +585,8 @@ class Affine(DualTransform):
         self.fill_mask = fill_mask
         self.border_mode = border_mode
         self.scale = cast("dict[str, tuple[float, float]]", scale)
-        self.translate_percent = cast("dict[str, tuple[float, float]]", translate_percent)
-        self.translate_px = cast("dict[str, tuple[int, int]]", translate_px)
+        self.translate_percent = cast("dict[str, tuple[float, float]] | None", translate_percent)
+        self.translate_px = cast("dict[str, tuple[int, int]] | None", translate_px)
         self.rotate = rotate
         self.fit_output = fit_output
         self.shear = cast("dict[str, tuple[float, float]]", shear)
@@ -688,7 +630,7 @@ class Affine(DualTransform):
                 border_value=self.fill,
                 dsize=(width, height),
             )
-        return result
+        return cast("ImageType", result)
 
     def apply_to_mask(
         self,
@@ -866,8 +808,8 @@ class Affine(DualTransform):
         height, width = image_shape[:2]
         if self.translate_px is not None:
             return {
-                "x": self.py_random.randint(int(self.translate_px["x"][0]), int(self.translate_px["x"][1])),
-                "y": self.py_random.randint(int(self.translate_px["y"][0]), int(self.translate_px["y"][1])),
+                "x": self.py_random.randint(self.translate_px["x"][0], self.translate_px["x"][1]),
+                "y": self.py_random.randint(self.translate_px["y"][0], self.translate_px["y"][1]),
             }
         if self.translate_percent is not None:
             translate = {key: self.py_random.uniform(*value) for key, value in self.translate_percent.items()}
@@ -975,21 +917,9 @@ class ShiftScaleRotate(Affine):
         shift_range: tuple[float, float]
         scale_range: tuple[float, float]
         rotate_range: tuple[float, float]
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
+        interpolation: InterpolationType
 
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
@@ -997,13 +927,7 @@ class ShiftScaleRotate(Affine):
         shift_range_x: tuple[float, float] | None
         shift_range_y: tuple[float, float] | None
         rotate_method: Literal["largest_box", "ellipse"]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
+        mask_interpolation: InterpolationType
 
         @model_validator(mode="after")
         def _check_shift_range(self) -> Self:
@@ -1034,37 +958,23 @@ class ShiftScaleRotate(Affine):
         shift_range: tuple[float, float] = (-0.0625, 0.0625),
         scale_range: tuple[float, float] = (-0.1, 0.1),
         rotate_range: tuple[float, float] = (-45, 45),
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_LINEAR,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        interpolation: InterpolationType = CV2_INTER_LINEAR,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         shift_range_x: tuple[float, float] | None = None,
         shift_range_y: tuple[float, float] | None = None,
         rotate_method: Literal["largest_box", "ellipse"] = "largest_box",
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_NEAREST,
+        mask_interpolation: InterpolationType = CV2_INTER_NEAREST,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 0.5,
     ):
+        translate_percent = {
+            "x": shift_range if shift_range_x is None else shift_range_x,
+            "y": shift_range if shift_range_y is None else shift_range_y,
+        }
         super().__init__(
             scale=scale_range,
-            translate_percent={"x": shift_range_x, "y": shift_range_y},  # type: ignore[dict-item]
+            translate_percent=translate_percent,
             rotate=rotate_range,
             shear=(0, 0),
             interpolation=interpolation,
@@ -1225,39 +1135,15 @@ class GridElasticDeform(DualTransform):
     class InitSchema(BaseTransformInitSchema):
         num_grid_xy: Annotated[tuple[int, int], AfterValidator(check_range_bounds(1, None))]
         magnitude: int = Field(gt=0)
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ]
+        interpolation: InterpolationType
+        mask_interpolation: InterpolationType
 
     def __init__(
         self,
         num_grid_xy: tuple[int, int],
         magnitude: int,
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-        ] = cv2.INTER_NEAREST,
+        interpolation: InterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: InterpolationType = CV2_INTER_NEAREST,
         p: float = 1.0,
     ):
         super().__init__(p=p)
@@ -1476,7 +1362,7 @@ class RandomGridShuffle(DualTransform):
         self,
         bboxes: np.ndarray,
         tiles: np.ndarray,
-        mapping: np.ndarray,
+        mapping: list[int],
         **params: Any,
     ) -> np.ndarray:
         image_shape = params["shape"][:2]
@@ -1500,7 +1386,7 @@ class RandomGridShuffle(DualTransform):
         self,
         keypoints: np.ndarray,
         tiles: np.ndarray,
-        mapping: np.ndarray,
+        mapping: list[int],
         **params: Any,
     ) -> np.ndarray:
         return fgeometric.swap_tiles_on_keypoints(keypoints, tiles, mapping)
@@ -1521,7 +1407,7 @@ class RandomGridShuffle(DualTransform):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray | list[int]]:
         image_shape = params["shape"][:2]
 
         original_tiles = fgeometric.split_uniform_grid(
@@ -1637,7 +1523,7 @@ class Morphological(DualTransform):
     def apply(
         self,
         img: ImageType,
-        kernel: tuple[int, int],
+        kernel: np.ndarray,
         **params: Any,
     ) -> ImageType:
         return fgeometric.morphology(img, kernel, self.operation)
@@ -1645,7 +1531,7 @@ class Morphological(DualTransform):
     def apply_to_bboxes(
         self,
         bboxes: np.ndarray,
-        kernel: tuple[int, int],
+        kernel: np.ndarray,
         **params: Any,
     ) -> np.ndarray:
         image_shape = params["shape"]
@@ -1669,7 +1555,7 @@ class Morphological(DualTransform):
     ) -> np.ndarray:
         return keypoints
 
-    def get_params(self) -> dict[str, float]:
+    def get_params(self) -> dict[str, np.ndarray]:
         return {
             "kernel": cv2.getStructuringElement(cv2.MORPH_ELLIPSE, self.scale),
         }

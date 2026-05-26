@@ -1,13 +1,15 @@
 """Bounding-box-aware safe crop transforms."""
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar
 
 from ._transforms_shared import (
     ALL_TARGETS,
+    CV2_INTER_LINEAR,
+    CV2_INTER_NEAREST,
     BaseTransformInitSchema,
     Field,
+    FullInterpolationType,
     ImageType,
-    cv2,
     denormalize_bboxes,
     fcrops,
     fgeometric,
@@ -18,6 +20,13 @@ from .base import (
     BaseCrop,
     CropSizeError,
 )
+
+
+class _BBoxSafeRandomCropInitSchema(BaseTransformInitSchema):
+    erosion_rate: float = Field(
+        ge=0.0,
+        le=1.0,
+    )
 
 
 class BBoxSafeRandomCrop(BaseCrop):
@@ -126,11 +135,7 @@ class BBoxSafeRandomCrop(BaseCrop):
 
     _targets = ALL_TARGETS
 
-    class InitSchema(BaseTransformInitSchema):
-        erosion_rate: float = Field(
-            ge=0.0,
-            le=1.0,
-        )
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _BBoxSafeRandomCropInitSchema
 
     def __init__(self, erosion_rate: float = 0.0, p: float = 1.0):
         super().__init__(p=p)
@@ -335,48 +340,16 @@ class RandomSizedBBoxSafeCrop(BBoxSafeRandomCrop):
             ge=0.0,
             le=1.0,
         )
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
+        interpolation: FullInterpolationType
+        mask_interpolation: FullInterpolationType
 
     def __init__(
         self,
         height: int,
         width: int,
         erosion_rate: float = 0.0,
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_NEAREST,
+        interpolation: FullInterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: FullInterpolationType = CV2_INTER_NEAREST,
         p: float = 1.0,
     ):
         super().__init__(erosion_rate=erosion_rate, p=p)
@@ -548,7 +521,7 @@ class AtLeastOneBBoxRandomCrop(BaseCrop):
 
     _targets = ALL_TARGETS
 
-    class InitSchema(BaseCrop.InitSchema):
+    class InitSchema(BaseTransformInitSchema):
         height: Annotated[int, Field(ge=1)]
         width: Annotated[int, Field(ge=1)]
         erosion_factor: Annotated[float, Field(ge=0.0, le=1.0)]

@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from functools import lru_cache
 from itertools import product
 from math import ceil
-from typing import Literal
+from typing import Literal, cast
 from warnings import warn
 
 import cv2
@@ -46,9 +46,9 @@ def box_blur(img: ImageType, ksize: int) -> ImageType:
         ImageType: Blurred image.
 
     """
-    img = np.array(img, copy=True, order="C")
-    cv2.blur(img, (ksize, ksize), dst=img)
-    return img
+    result = np.array(img, copy=True, order="C")
+    cv2.blur(result, (ksize, ksize), dst=result)
+    return cast("ImageType", result)
 
 
 @preserve_channel_dim
@@ -105,7 +105,7 @@ def glass_blur(
     else:
         raise ValueError(f"Unsupported mode `{mode}`. Supports only `fast` and `exact`.")
 
-    return cv2.GaussianBlur(x, sigmaX=sigma, ksize=(0, 0))
+    return cast("ImageType", cv2.GaussianBlur(x, sigmaX=sigma, ksize=(0, 0)))
 
 
 @lru_cache(maxsize=128)
@@ -215,7 +215,7 @@ def mode_filter(img: ImageType, kernel_size: int) -> ImageType:
         best_counts = np.where(better_run, current_counts, best_counts)
         best_values = np.where(better_run, current_values, best_values)
 
-    return best_values.astype(img.dtype, copy=False)
+    return cast("ImageType", best_values.astype(img.dtype, copy=False))
 
 
 def _ensure_min_value(result: tuple[int, int], min_value: int, field_name: str | None) -> tuple[int, int]:
@@ -253,7 +253,7 @@ def process_blur_range(value: tuple[int, int], info: ValidationInfo, min_value: 
     if not isinstance(value, Sequence) or len(value) != 2:
         raise ValueError("blur range must be a tuple of exactly 2 ints")
 
-    result = (int(value[0]), int(value[1]))
+    result = (value[0], value[1])
     result = _ensure_min_value(result, min_value, info.field_name)
     result = _ensure_odd_values(result, info.field_name)
 

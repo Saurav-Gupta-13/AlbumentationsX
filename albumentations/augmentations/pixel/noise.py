@@ -5,7 +5,7 @@ ISO, multiplicative, shot, salt-and-pepper, additive, and film grain noise.
 """
 
 from collections.abc import Sequence
-from typing import Annotated, Any, Literal, TypeAlias
+from typing import Annotated, Any, ClassVar, Literal, TypeAlias
 
 import cv2
 import numpy as np
@@ -130,7 +130,7 @@ class GaussNoise(ImageOnlyTransform):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, float]:
+    ) -> dict[str, np.ndarray]:
         metadata = self.get_image_data(data)
         max_value = MAX_VALUES_BY_DTYPE[metadata["dtype"]]
         shape = (metadata["height"], metadata["width"], metadata["num_channels"])
@@ -477,7 +477,6 @@ class NoiseParamsBase(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    noise_type: str
 
 
 class UniformParams(NoiseParamsBase):
@@ -494,7 +493,7 @@ class UniformParams(NoiseParamsBase):
             min_val, max_val = range_values
             if not (-1 <= min_val <= max_val <= 1):
                 raise ValueError("Range values must be in [-1, 1] and min <= max")
-            result.append((float(min_val), float(max_val)))
+            result.append((min_val, max_val))
         return result
 
 
@@ -542,6 +541,52 @@ NoiseParams: TypeAlias = Annotated[
     UniformParams | GaussianParams | LaplaceParams | BetaParams,
     Field(discriminator="noise_type"),
 ]
+
+
+class _AdditiveNoiseInitSchema(BaseTransformInitSchema):
+    noise_type: Literal["uniform", "gaussian", "laplace", "beta"]
+    spatial_mode: Literal["constant", "per_pixel", "shared"]
+    noise_params: dict[str, Any] | None
+
+    @model_validator(mode="after")
+    def _validate_noise_params(self) -> Self:
+        # Default parameters for each noise type
+        default_params: dict[str, dict[str, Any]] = {
+            "uniform": {
+                "ranges": [(-0.1, 0.1)],  # Single channel by default
+            },
+            "gaussian": {"mean_range": (0.0, 0.0), "std_range": (0.05, 0.15)},
+            "laplace": {"mean_range": (0.0, 0.0), "scale_range": (0.05, 0.15)},
+            "beta": {
+                "alpha_range": (0.5, 1.5),
+                "beta_range": (0.5, 1.5),
+                "scale_range": (0.1, 0.3),
+            },
+        }
+
+        # Use default params if none provided
+        params_dict: dict[str, Any] = (
+            self.noise_params if self.noise_params is not None else default_params[self.noise_type]
+        )
+
+        # Add noise_type to params if not present
+        params_dict = {**params_dict, "noise_type": self.noise_type}
+
+        # Convert dict to appropriate NoiseParams object and validate
+        params_class: Any = {
+            "uniform": UniformParams,
+            "gaussian": GaussianParams,
+            "laplace": LaplaceParams,
+            "beta": BetaParams,
+        }[self.noise_type]
+
+        # Validate using the appropriate NoiseParams class
+        validated_params = params_class(**params_dict)
+
+        # Store the validated parameters as a dict
+        self.noise_params = validated_params.model_dump()
+
+        return self
 
 
 class AdditiveNoise(ImageOnlyTransform):
@@ -633,48 +678,7 @@ class AdditiveNoise(ImageOnlyTransform):
 
     """
 
-    class InitSchema(BaseTransformInitSchema):
-        noise_type: Literal["uniform", "gaussian", "laplace", "beta"]
-        spatial_mode: Literal["constant", "per_pixel", "shared"]
-        noise_params: dict[str, Any] | None
-
-        @model_validator(mode="after")
-        def _validate_noise_params(self) -> Self:
-            # Default parameters for each noise type
-            default_params = {
-                "uniform": {
-                    "ranges": [(-0.1, 0.1)],  # Single channel by default
-                },
-                "gaussian": {"mean_range": (0.0, 0.0), "std_range": (0.05, 0.15)},
-                "laplace": {"mean_range": (0.0, 0.0), "scale_range": (0.05, 0.15)},
-                "beta": {
-                    "alpha_range": (0.5, 1.5),
-                    "beta_range": (0.5, 1.5),
-                    "scale_range": (0.1, 0.3),
-                },
-            }
-
-            # Use default params if none provided
-            params_dict = self.noise_params if self.noise_params is not None else default_params[self.noise_type]
-
-            # Add noise_type to params if not present
-            params_dict = {**params_dict, "noise_type": self.noise_type}  # type: ignore[dict-item]
-
-            # Convert dict to appropriate NoiseParams object and validate
-            params_class = {
-                "uniform": UniformParams,
-                "gaussian": GaussianParams,
-                "laplace": LaplaceParams,
-                "beta": BetaParams,
-            }[self.noise_type]
-
-            # Validate using the appropriate NoiseParams class
-            validated_params = params_class(**params_dict)
-
-            # Store the validated parameters as a dict
-            self.noise_params = validated_params.model_dump()
-
-            return self
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _AdditiveNoiseInitSchema
 
     def __init__(
         self,

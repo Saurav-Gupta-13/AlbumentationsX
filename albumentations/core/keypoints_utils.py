@@ -8,7 +8,7 @@ xy, yx, and those with additional angle or size information.
 
 import math
 from collections.abc import Sequence
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -198,7 +198,7 @@ class KeypointParams(Params):
         return np.array([], dtype=np.float32).reshape(0, len(self.coord_format))
 
 
-class KeypointsProcessor(DataProcessor):
+class KeypointsProcessor(DataProcessor[KeypointParams]):
     """DataProcessor for keypoints: conversion, validation, filtering. Uses KeypointParams
     and label_mapping. Compose uses this when keypoint_params is set.
 
@@ -212,8 +212,6 @@ class KeypointsProcessor(DataProcessor):
         additional_targets (dict[str, str] | None): Dictionary mapping additional target names to their types.
 
     """
-
-    params: KeypointParams
 
     def __init__(self, params: KeypointParams, additional_targets: dict[str, str] | None = None):
         super().__init__(params, additional_targets)
@@ -259,7 +257,6 @@ class KeypointsProcessor(DataProcessor):
             np.ndarray: Filtered keypoints
 
         """
-        self.params: KeypointParams
         return filter_keypoints(data, shape, remove_invisible=self.params.remove_invisible)
 
     def check(self, data: np.ndarray, shape: tuple[int, int] | tuple[int, int, int]) -> None:
@@ -321,7 +318,7 @@ class KeypointsProcessor(DataProcessor):
         """Convert one label field mapping to encoded ints (private). Uses metadata.encoder;
         warns if labels not in encoder. Call from convert_label_mappings_to_encoded.
         """
-        encoded_mapping = {}
+        encoded_mapping: dict[int, int] = {}
 
         if metadata.encoder is not None:
             # Convert string mapping to encoded integers
@@ -363,7 +360,7 @@ class KeypointsProcessor(DataProcessor):
                 )
         else:
             # Numerical labels, use mapping as-is
-            encoded_mapping |= mapping
+            encoded_mapping.update(cast("dict[int, int]", mapping))
 
         return encoded_mapping
 

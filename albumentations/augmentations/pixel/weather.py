@@ -165,11 +165,11 @@ class RandomSnow(ImageOnlyTransform):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, np.ndarray | None]:
+    ) -> dict[str, float | np.ndarray | None]:
         image_shape = params["shape"][:2]
         snow_point = self.py_random.uniform(*self.snow_point_range)
 
-        result = {
+        result: dict[str, float | np.ndarray | None] = {
             "snow_point": snow_point,
             "snow_texture": None,
             "sparkle_mask": None,
@@ -286,7 +286,7 @@ class RandomGravel(ImageOnlyTransform):
     def generate_gravel_patch(
         self,
         rectangular_roi: tuple[int, int, int, int],
-    ) -> ImageType:
+    ) -> np.ndarray:
         """Generate gravel (x,y) coordinates inside rectangular_roi (x_min,y_min,x_max,y_max).
         Returns (N, 2) array for RandomGravel overlay.
 
@@ -295,7 +295,7 @@ class RandomGravel(ImageOnlyTransform):
                 particles will be generated, specified as (x_min, y_min, x_max, y_max) in pixel coordinates.
 
         Returns:
-            ImageType: An array of gravel particles with shape (count, 2), where count is the number of particles.
+            np.ndarray: An array of gravel particles with shape (count, 2), where count is the number of particles.
             Each row contains the (x, y) coordinates of a gravel particle.
 
         """
@@ -1123,7 +1123,7 @@ class RandomShadow(ImageOnlyTransform):
         self,
         params: dict[str, Any],
         data: dict[str, Any],
-    ) -> dict[str, list[np.ndarray]]:
+    ) -> dict[str, list[np.ndarray] | np.ndarray]:
         metadata = self.get_image_data(data)
         height, width = (metadata["height"], metadata["width"])
 
@@ -1374,7 +1374,7 @@ class Spatter(ImageOnlyTransform):
             scale=std,
         )
         # Convert sigma to kernel size (must be odd)
-        ksize = int(2 * round(3 * sigma) + 1)  # 3 sigma rule, rounded to nearest odd
+        ksize = 2 * round(3 * sigma) + 1  # 3 sigma rule, rounded to nearest odd
         cv2.GaussianBlur(
             src=liquid_layer,
             dst=liquid_layer,  # in-place operation
@@ -1527,10 +1527,10 @@ class AtmosphericFog(ImageOnlyTransform):
             max_dist = np.sqrt(cy**2 + cx**2)
             depth_map = (dist / max_dist).astype(np.float32)
 
-        max_val = float(albucore.MAX_VALUES_BY_DTYPE[np.uint8])
+        max_val = albucore.MAX_VALUES_BY_DTYPE[np.uint8]
         image_data = self.get_image_data(data)
         img_dtype = image_data["dtype"]
-        actual_max = float(albucore.MAX_VALUES_BY_DTYPE[img_dtype])
+        actual_max = albucore.MAX_VALUES_BY_DTYPE[img_dtype]
         fog_color_scaled = tuple(c / max_val * actual_max for c in self.fog_color)
 
         self.applied_config = {"density_range": density}

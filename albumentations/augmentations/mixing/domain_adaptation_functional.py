@@ -7,7 +7,7 @@ and pixel distribution matching with various normalization techniques.
 
 import abc
 from copy import deepcopy
-from typing import Literal
+from typing import Any, Literal, cast
 
 import cv2
 import numpy as np
@@ -191,7 +191,9 @@ class StandardScaler(BaseScaler):
             When variance is zero for a feature, the scale is set to 1 to avoid division by zero.
 
         """
-        self.mean, self.scale = mean_std(x, axis=0, eps=0)
+        mean, scale = mean_std(x, axis=0, eps=0)
+        self.mean = np.asarray(mean)
+        self.scale = np.asarray(scale)
         # Handle case where std is zero
         self.scale[self.scale == 0] = 1
 
@@ -254,28 +256,26 @@ class TransformerInterface(Protocol):
         ...
 
     @abc.abstractmethod
-    def fit(self, x: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
-        """Fit the transformer to the data (e.g. pixel samples). Optional y unused; returns self.
-        Subclasses implement; call before transform.
+    def fit(self, x: np.ndarray) -> Any:
+        """Fit the transformer to the data (e.g. pixel samples). Subclasses may return self or
+        None; callers do not consume the return value.
 
         Args:
             x (np.ndarray): The data to fit to.
-            y (np.ndarray | None): Optional target data (not used in most implementations).
 
         Returns:
-            np.ndarray: The fitted transformer instance.
+            Any: Transformer-specific fit result.
 
         """
         ...
 
     @abc.abstractmethod
-    def transform(self, x: np.ndarray, y: np.ndarray | None = None) -> np.ndarray:
-        """Transform data using the fitted model. Same shape as input; optional y is unused.
-        Abstract protocol method; subclasses implement the actual transformation.
+    def transform(self, x: np.ndarray) -> np.ndarray:
+        """Transform data using the fitted model. Same shape as input. Abstract protocol method;
+        subclasses implement the actual transformation.
 
         Args:
             x (np.ndarray): The data to transform.
-            y (np.ndarray | None): Optional target data (not used in most implementations).
 
         Returns:
             np.ndarray: The transformed data.
@@ -308,7 +308,7 @@ class DomainAdapter:
             ImageType: The image in the target color space, or the original image if no conversion is specified.
 
         """
-        return img if self.color_in is None else cv2.cvtColor(img, self.color_in)
+        return img if self.color_in is None else cast("ImageType", cv2.cvtColor(img, self.color_in))
 
     def from_colorspace(self, img: ImageType) -> ImageType:
         """Convert image back from target color space to original (e.g. after PCA). Uses
@@ -324,7 +324,7 @@ class DomainAdapter:
         """
         if self.color_out is None:
             return img
-        return cv2.cvtColor(clip(img, np.uint8, inplace=True), self.color_out)
+        return cast("ImageType", cv2.cvtColor(clip(img, np.dtype(np.uint8), inplace=True), self.color_out))
 
     def flatten(self, img: ImageType) -> np.ndarray:
         """Flatten image to (n_pixels, n_channels): target colorspace, to float, reshape. For
@@ -355,26 +355,28 @@ class DomainAdapter:
                 or (height, width, n_channels) for color images.
 
         """
-        pixels = clip(pixels, np.uint8, inplace=True)
+        pixels = clip(pixels, np.dtype(np.uint8), inplace=True)
         if self.num_channels == 1:
             return self.from_colorspace(pixels.reshape(height, width))
         return self.from_colorspace(pixels.reshape(height, width, self.num_channels))
 
     @staticmethod
-    def _pca_sign(x: np.ndarray) -> np.ndarray:
-        return np.sign(np.trace(x.components_))
+    def _pca_sign(x: Any) -> np.ndarray:
+        return np.sign(np.trace(cast("np.ndarray", x.components_)))
 
     def __call__(self, image: ImageType) -> ImageType:
         height, width = image.shape[:2]
         pixels = self.flatten(image)
         self.source_transformer.fit(pixels)
 
+        target_transformer = cast("Any", self.target_transformer)
+        source_transformer = cast("Any", self.source_transformer)
         if (
-            hasattr(self.target_transformer, "components_")
-            and hasattr(self.source_transformer, "components_")
-            and self._pca_sign(self.target_transformer) != self._pca_sign(self.source_transformer)
+            hasattr(target_transformer, "components_")
+            and hasattr(source_transformer, "components_")
+            and self._pca_sign(target_transformer) != self._pca_sign(source_transformer)
         ):
-            self.target_transformer.components_ *= -1
+            target_transformer.components_ *= -1
 
         representation = self.source_transformer.transform(pixels)
         result = self.target_transformer.inverse_transform(representation)
@@ -417,17 +419,17 @@ def adapt_pixel_distribution(
         raise ValueError("Input image and reference image must have the same number of channels.")
 
     if img_num_channels == 1:
-        img = np.squeeze(img)
-        ref = np.squeeze(ref)
+        img = cast("ImageType", np.squeeze(img))
+        ref = cast("ImageType", np.squeeze(ref))
 
     if img.shape != ref.shape:
-        ref = fgeometric.resize(ref, img.shape[:2], cv2.INTER_AREA)
+        ref = fgeometric.resize(ref, cast("tuple[int, int]", img.shape[:2]), cv2.INTER_AREA)
 
     original_dtype = img.dtype
 
     if original_dtype == np.float32:
-        img = from_float(img, np.uint8)
-        ref = from_float(ref, np.uint8)
+        img = from_float(cast("np.ndarray", img), np.dtype(np.uint8))
+        ref = from_float(cast("np.ndarray", ref), np.dtype(np.uint8))
 
     transformer = {"pca": PCA, "standard": StandardScaler, "minmax": MinMaxScaler}[transform_type]()
     adapter = DomainAdapter(transformer=transformer, ref_img=ref)
@@ -586,7 +588,7 @@ def apply_histogram(img: ImageType, reference_image: ImageType, blend_ratio: flo
     """
     # Resize reference image only if necessary
     if img.shape[:2] != reference_image.shape[:2]:
-        reference_image = fgeometric.resize(reference_image, img.shape[:2], cv2.INTER_LINEAR)
+        reference_image = fgeometric.resize(reference_image, cast("tuple[int, int]", img.shape[:2]), cv2.INTER_LINEAR)
 
     reference_image = reference_image.reshape(img.shape)
 
@@ -618,7 +620,7 @@ def match_histograms(image: ImageType, reference: ImageType) -> ImageType:
 
     """
     if reference.dtype != np.uint8:
-        reference = from_float(reference, np.uint8)
+        reference = from_float(cast("np.ndarray", reference), np.dtype(np.uint8))
 
     matched = np.empty(image.shape, dtype=np.uint8)
 

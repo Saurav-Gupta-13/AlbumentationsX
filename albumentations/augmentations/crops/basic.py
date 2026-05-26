@@ -7,14 +7,18 @@ from typing_extensions import Self
 
 from ._transforms_shared import (
     ALL_TARGETS,
+    CV2_BORDER_CONSTANT,
+    CV2_INTER_LINEAR,
+    CV2_INTER_NEAREST,
     PAIR,
     BaseTransformInitSchema,
+    BorderModeType,
     DualTransform,
     Field,
+    FullInterpolationType,
     ImageType,
     PercentType,
     PxType,
-    cv2,
     fcrops,
     fgeometric,
     model_validator,
@@ -127,13 +131,7 @@ class RandomCrop(BaseCropAndPad):
     class InitSchema(BaseCropAndPad.InitSchema):
         height: Annotated[int, Field(ge=1)]
         width: Annotated[int, Field(ge=1)]
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
@@ -144,13 +142,7 @@ class RandomCrop(BaseCropAndPad):
         width: int,
         pad_if_needed: bool = False,
         pad_position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"] = "center",
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0.0,
         fill_mask: tuple[float, ...] | float = 0.0,
         p: float = 1.0,
@@ -315,13 +307,7 @@ class CenterCrop(BaseCropAndPad):
     class InitSchema(BaseCropAndPad.InitSchema):
         height: Annotated[int, Field(ge=1)]
         width: Annotated[int, Field(ge=1)]
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
@@ -332,13 +318,7 @@ class CenterCrop(BaseCropAndPad):
         width: int,
         pad_if_needed: bool = False,
         pad_position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"] = "center",
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0.0,
         fill_mask: tuple[float, ...] | float = 0.0,
         p: float = 1.0,
@@ -516,13 +496,7 @@ class Crop(BaseCropAndPad):
         y_min: Annotated[int, Field(ge=0)]
         x_max: Annotated[int, Field(gt=0)]
         y_max: Annotated[int, Field(gt=0)]
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
@@ -546,13 +520,7 @@ class Crop(BaseCropAndPad):
         y_max: int = 1024,
         pad_if_needed: bool = False,
         pad_position: Literal["center", "top_left", "top_right", "bottom_left", "bottom_right", "random"] = "center",
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 1.0,
@@ -799,33 +767,11 @@ class CropAndPad(DualTransform):
         percent: PercentType | None
         keep_size: bool
         sample_independently: bool
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ]
+        interpolation: FullInterpolationType
+        mask_interpolation: FullInterpolationType
         fill: tuple[float, ...] | float
         fill_mask: tuple[float, ...] | float
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ]
+        border_mode: BorderModeType
 
         @model_validator(mode="after")
         def _check_px_percent(self) -> Self:
@@ -844,31 +790,9 @@ class CropAndPad(DualTransform):
         percent: PercentType | None = None,
         keep_size: bool = True,
         sample_independently: bool = True,
-        interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_LINEAR,
-        mask_interpolation: Literal[
-            cv2.INTER_NEAREST,
-            cv2.INTER_NEAREST_EXACT,
-            cv2.INTER_LINEAR,
-            cv2.INTER_CUBIC,
-            cv2.INTER_AREA,
-            cv2.INTER_LANCZOS4,
-            cv2.INTER_LINEAR_EXACT,
-        ] = cv2.INTER_NEAREST,
-        border_mode: Literal[
-            cv2.BORDER_CONSTANT,
-            cv2.BORDER_REPLICATE,
-            cv2.BORDER_REFLECT,
-            cv2.BORDER_WRAP,
-            cv2.BORDER_REFLECT_101,
-        ] = cv2.BORDER_CONSTANT,
+        interpolation: FullInterpolationType = CV2_INTER_LINEAR,
+        mask_interpolation: FullInterpolationType = CV2_INTER_NEAREST,
+        border_mode: BorderModeType = CV2_BORDER_CONSTANT,
         fill: tuple[float, ...] | float = 0,
         fill_mask: tuple[float, ...] | float = 0,
         p: float = 1.0,
@@ -891,8 +815,8 @@ class CropAndPad(DualTransform):
     def apply(
         self,
         img: ImageType,
-        crop_params: Sequence[int],
-        pad_params: Sequence[int],
+        crop_params: tuple[int, int, int, int] | None,
+        pad_params: tuple[int, int, int, int] | None,
         fill: tuple[float, ...] | float,
         **params: Any,
     ) -> ImageType:
@@ -910,8 +834,8 @@ class CropAndPad(DualTransform):
     def apply_to_mask(
         self,
         mask: ImageType,
-        crop_params: Sequence[int],
-        pad_params: Sequence[int],
+        crop_params: tuple[int, int, int, int] | None,
+        pad_params: tuple[int, int, int, int] | None,
         fill_mask: tuple[float, ...] | float,
         **params: Any,
     ) -> ImageType:
@@ -929,8 +853,8 @@ class CropAndPad(DualTransform):
     def apply_to_bboxes(
         self,
         bboxes: np.ndarray,
-        crop_params: tuple[int, int, int, int],
-        pad_params: tuple[int, int, int, int],
+        crop_params: tuple[int, int, int, int] | None,
+        pad_params: tuple[int, int, int, int] | None,
         result_shape: tuple[int, int],
         **params: Any,
     ) -> np.ndarray:
@@ -939,8 +863,8 @@ class CropAndPad(DualTransform):
     def apply_to_keypoints(
         self,
         keypoints: np.ndarray,
-        crop_params: tuple[int, int, int, int],
-        pad_params: tuple[int, int, int, int],
+        crop_params: tuple[int, int, int, int] | None,
+        pad_params: tuple[int, int, int, int] | None,
         result_shape: tuple[int, int],
         **params: Any,
     ) -> np.ndarray:
@@ -988,6 +912,7 @@ class CropAndPad(DualTransform):
 
     def get_params_dependent_on_data(self, params: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         height, width = params["shape"][:2]
+        percent_params: list[float] | None = None
 
         if self.px is not None:
             new_params = self._get_px_params()
@@ -1028,6 +953,8 @@ class CropAndPad(DualTransform):
         if self.px is not None:
             applied_config["px"] = tuple(new_params)
         else:
+            if percent_params is None:
+                raise RuntimeError("percent_params must be initialized when px is not set")
             applied_config["percent"] = tuple(percent_params)
         if sampled_fill is not None:
             applied_config["fill"] = sampled_fill
@@ -1036,8 +963,8 @@ class CropAndPad(DualTransform):
         self.applied_config = applied_config
 
         return {
-            "crop_params": crop_params or None,
-            "pad_params": pad_params or None,
+            "crop_params": tuple(crop_params) if crop_params else None,
+            "pad_params": tuple(pad_params) if pad_params else None,
             "fill": sampled_fill,
             "fill_mask": sampled_fill_mask,
             "result_shape": (result_rows, result_cols),

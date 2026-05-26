@@ -4,7 +4,7 @@ Transforms that reorder or permute image channels.
 """
 
 import warnings
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import field_validator
 
@@ -19,6 +19,29 @@ __all__ = [
     "ChannelShuffle",
     "ChannelSwap",
 ]
+
+
+class _ChannelShuffleInitSchema(BaseTransformInitSchema):
+    channel_order: tuple[int, ...] | None
+
+    @field_validator("channel_order")
+    @classmethod
+    def validate_channel_order(
+        cls,
+        v: tuple[int, ...] | None,
+    ) -> tuple[int, ...] | None:
+        """Validate that channel_order is a valid permutation of consecutive integers starting
+        from zero (i.e., a permutation of range(len(channel_order))).
+        """
+        if v is None:
+            return v
+        if len(v) < 2:
+            msg = "channel_order must have at least 2 elements."
+            raise ValueError(msg)
+        if sorted(v) != list(range(len(v))):
+            msg = f"channel_order must be a permutation of range({len(v)}), got {v}"
+            raise ValueError(msg)
+        return v
 
 
 class ChannelShuffle(ImageOnlyTransform):
@@ -67,27 +90,7 @@ class ChannelShuffle(ImageOnlyTransform):
 
     """
 
-    class InitSchema(BaseTransformInitSchema):
-        channel_order: tuple[int, ...] | None
-
-        @field_validator("channel_order")
-        @classmethod
-        def validate_channel_order(
-            cls,
-            v: tuple[int, ...] | None,
-        ) -> tuple[int, ...] | None:
-            """Validate that channel_order is a valid permutation of consecutive integers starting
-            from zero (i.e., a permutation of range(len(channel_order))).
-            """
-            if v is None:
-                return v
-            if len(v) < 2:
-                msg = "channel_order must have at least 2 elements."
-                raise ValueError(msg)
-            if sorted(v) != list(range(len(v))):
-                msg = f"channel_order must be a permutation of range({len(v)}), got {v}"
-                raise ValueError(msg)
-            return v
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = _ChannelShuffleInitSchema
 
     def __init__(
         self,

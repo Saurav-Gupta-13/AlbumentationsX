@@ -6,13 +6,14 @@ PixelDropout. These transforms randomly remove or modify pixels, channels, or re
 in images, which can help models become more robust to occlusions and missing information.
 """
 
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, cast
 
 import numpy as np
 from pydantic import Field
 
 from albumentations.augmentations.dropout import functional as fdropout
 from albumentations.augmentations.dropout.functional import (
+    FillValueLiteral,
     cutout,
     cutout_on_volume,
     cutout_on_volumes,
@@ -26,6 +27,13 @@ from albumentations.core.transforms_interface import BaseTransformInitSchema, Du
 from albumentations.core.type_definitions import ALL_TARGETS, ImageType, Targets, VolumeType
 
 __all__ = ["PixelDropout"]
+
+DropoutFillValue = tuple[float, ...] | float | FillValueLiteral
+
+
+class BaseDropoutInitSchema(BaseTransformInitSchema):
+    fill: DropoutFillValue
+    fill_mask: tuple[float, ...] | float | None
 
 
 class BaseDropout(DualTransform):
@@ -110,17 +118,11 @@ class BaseDropout(DualTransform):
 
     _targets: tuple[Targets, ...] | Targets = ALL_TARGETS
 
-    class InitSchema(BaseTransformInitSchema):
-        fill: (
-            tuple[float, ...] | float | Literal["random", "random_uniform", "inpaint_telea", "inpaint_ns", "grayscale"]
-        )
-        fill_mask: tuple[float, ...] | float | None
+    InitSchema: ClassVar[type[BaseTransformInitSchema]] = BaseDropoutInitSchema
 
     def __init__(
         self,
-        fill: tuple[float, ...]
-        | float
-        | Literal["random", "random_uniform", "inpaint_telea", "inpaint_ns", "grayscale"],
+        fill: DropoutFillValue,
         fill_mask: tuple[float, ...] | float | None,
         p: float,
     ):
@@ -327,7 +329,7 @@ class PixelDropout(DualTransform):
         self,
         mask: ImageType,
         mask_drop_mask: np.ndarray,
-        mask_drop_values: float | np.ndarray,
+        mask_drop_values: np.ndarray,
         **params: Any,
     ) -> ImageType:
         if self.mask_drop_value is None:

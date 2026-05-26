@@ -283,7 +283,7 @@ class BboxParams(Params):
         return np.array([], dtype=np.float32).reshape(0, cols)
 
 
-class BboxProcessor(DataProcessor):
+class BboxProcessor(DataProcessor[BboxParams]):
     """DataProcessor for bboxes: conversion, validation, clipping, filtering. Uses
     BboxParams; supports additional_targets so one Compose handles multiple bbox fields.
 
@@ -328,8 +328,6 @@ class BboxProcessor(DataProcessor):
         ... )
 
     """
-
-    params: BboxParams
 
     def __init__(self, params: BboxParams, additional_targets: dict[str, str] | None = None):
         super().__init__(params, additional_targets)
@@ -438,7 +436,6 @@ class BboxProcessor(DataProcessor):
                 the same length as the input `data`.
 
         """
-        self.params: BboxParams
         shape_2d = shape[:2] if len(shape) == 3 else shape
         return filter_bboxes_with_mask(
             data,
@@ -1413,7 +1410,7 @@ def bboxes_to_mask(
 
     # Fill each bbox in its channel
     for idx, box in enumerate(bboxes):
-        x_min, y_min, x_max, y_max = map(round, box[:4])
+        x_min, y_min, x_max, y_max = (round(float(value)) for value in np.asarray(box[:4]))
         x_min = max(0, min(width - 1, x_min))
         x_max = max(0, min(width - 1, x_max))
         y_min = max(0, min(height - 1, y_min))

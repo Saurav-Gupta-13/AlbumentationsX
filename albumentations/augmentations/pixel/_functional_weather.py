@@ -31,7 +31,6 @@ from ._functional_sharpness import (
 _maybe_process_in_chunks = cast("Any", maybe_process_in_chunks)
 
 
-@uint8_io
 def add_snow_bleach(
     img: ImageType,
     snow_point: float,
@@ -85,7 +84,7 @@ def add_snow_bleach(
         - Original implementation: https://github.com/UjjwalSaxena/Automold--Road-Augmentation-Library
 
     """
-    max_value = MAX_VALUES_BY_DTYPE[np.uint8]
+    max_value = MAX_VALUES_BY_DTYPE[np.dtype(img.dtype)]
 
     # Precompute snow_point threshold
     snow_point = (snow_point * max_value / 2) + (max_value / 3)
@@ -99,7 +98,7 @@ def add_snow_bleach(
     lightness_channel[mask] *= brightness_coeff
 
     # Clip the lightness values in place
-    lightness_channel = clip(lightness_channel, np.dtype(np.uint8), inplace=True)
+    lightness_channel = clip(lightness_channel, img.dtype, inplace=True)
 
     # Update the lightness channel in the original image
     image_hls[:, :, 1] = lightness_channel
@@ -133,7 +132,6 @@ def generate_snow_textures(
     return snow_texture, sparkle_mask
 
 
-@uint8_io
 def add_snow_texture(
     img: ImageType,
     snow_point: float,
@@ -142,7 +140,7 @@ def add_snow_texture(
     sparkle_mask: np.ndarray,
 ) -> ImageType:
     """Add snow effect: texture overlay, sparkle, depth gradient, blue tint. snow_point,
-    brightness_coeff; takes precomputed snow_texture and sparkle_mask. uint8 I/O.
+    brightness_coeff; takes precomputed snow_texture and sparkle_mask.
 
     This function simulates snowfall by applying multiple visual effects to the image,
     including brightness adjustment, snow texture overlay, depth simulation, and color tinting.
@@ -193,7 +191,7 @@ def add_snow_texture(
         - HSV Color Space: https://en.wikipedia.org/wiki/HSL_and_HSV
 
     """
-    max_value = MAX_VALUES_BY_DTYPE[np.uint8]
+    max_value = MAX_VALUES_BY_DTYPE[np.dtype(img.dtype)]
 
     # Convert to HSV for better color control
     img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
@@ -218,22 +216,27 @@ def add_snow_texture(
         np.float32,
     )
 
-    # Blend snow with original image
-    img_with_snow = cv2.add(img_hsv, snow_layer)
+    # Blend snow with original image using numpy to allow broadcasting across channels
+    # Only apply the snow intensity to the V (brightness) channel to preserve hue
+    img_with_snow = img_hsv.copy()
+    img_with_snow[:, :, 2] += snow_layer[:, :, 0]
 
     # Add a slight blue tint to simulate cool snow color
-    blue_tint = np.full_like(img_with_snow, (0.6, 0.75, 1))  # Slight blue in HSV
+    hue_max = 180 if img.dtype == np.uint8 else 360
+    blue_tint_value = (0.6 * hue_max, 0.75 * max_value, 1.0 * max_value)
 
-    img_with_snow = cv2.addWeighted(
-        img_with_snow,
-        0.85,
-        blue_tint,
-        0.15 * snow_point,
-        0,
-    )
+    blue_tint = np.full_like(img_with_snow, blue_tint_value)
 
-    # Convert back to RGB
-    img_with_snow = cast("ImageType", cv2.cvtColor(img_with_snow.astype(np.uint8), cv2.COLOR_HSV2RGB))
+    img_with_snow = 0.85 * img_with_snow + (0.15 * snow_point) * blue_tint
+
+    # Clip H, S, and V channels before converting back to RGB using dynamic max bounds
+    img_with_snow[:, :, 0] = np.clip(img_with_snow[:, :, 0], 0, hue_max)
+    img_with_snow[:, :, 1] = np.clip(img_with_snow[:, :, 1], 0, max_value)
+    img_with_snow[:, :, 2] = np.clip(img_with_snow[:, :, 2], 0, max_value)
+
+    # Convert back to RGB - cast to original dtype before cvtColor
+    # to avoid OpenCV misinterpreting float ranges for uint8 inputs
+    img_with_snow = cast("ImageType", cv2.cvtColor(img_with_snow.astype(img.dtype), cv2.COLOR_HSV2RGB))
 
     # Add some sparkle effects for snow glitter
     img_with_snow[sparkle_mask] = [max_value, max_value, max_value]
